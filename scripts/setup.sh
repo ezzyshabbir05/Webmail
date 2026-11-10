@@ -130,6 +130,11 @@ mkdir -p data/mailserver/etc data/mailserver/var data/webmail webmail/public
 DKIM_KEY_PATH="data/mailserver/etc/dkim-ed25519.key"
 DKIM_PUB_PATH="data/mailserver/etc/dkim-ed25519.pub"
 
+# Preserve existing key from previous run if in legacy data/postarc
+if [ -f "data/postarc/etc/dkim-ed25519.key" ] && [ ! -f "$DKIM_KEY_PATH" ]; then
+    cp -n data/postarc/etc/dkim-ed25519.* data/mailserver/etc/ 2>/dev/null || true
+fi
+
 if [ ! -f "$DKIM_KEY_PATH" ] && command -v openssl >/dev/null 2>&1; then
     openssl genpkey -algorithm ed25519 -out "$DKIM_KEY_PATH" 2>/dev/null || true
     openssl pkey -in "$DKIM_KEY_PATH" -pubout -out "$DKIM_PUB_PATH" 2>/dev/null || true

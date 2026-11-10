@@ -126,7 +126,14 @@ Write-Host ""
 Write-Host "--- [4/5] Preparing Directories and Configuration ---" -ForegroundColor Yellow
 New-Item -ItemType Directory -Force -Path "data/mailserver/etc", "data/mailserver/var", "data/webmail", "webmail/public" | Out-Null
 
+if (Test-Path "data/postarc/etc/dkim-ed25519.pub" -and -not (Test-Path "data/mailserver/etc/dkim-ed25519.pub")) {
+    Copy-Item "data/postarc/etc/dkim-ed25519.*" "data/mailserver/etc/" -ErrorAction SilentlyContinue
+}
+
 $dkimPubKey = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC3postarc"
+if (Test-Path "data/mailserver/etc/dkim-ed25519.pub") {
+    $dkimPubKey = (Get-Content "data/mailserver/etc/dkim-ed25519.pub" | Where-Object { $_ -notmatch '-----' }) -join ""
+}
 
 # Write .env file
 $envLines = @(
