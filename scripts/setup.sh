@@ -162,31 +162,27 @@ POSTARC_SERVER_URL=http://postarc-mailserver:8080
 NEXT_PUBLIC_APP_NAME="Postarc Webmail"
 EOF
 
-# Write Postarc Mailserver config.json
+# Write Postarc Mailserver config.json (DataStore settings)
 cat <<EOF > data/mailserver/etc/config.json
 {
-  "store": {
-    "data": {
-      "@type": "Sqlite",
-      "path": "/var/lib/postarc/postarc.db"
-    },
-    "blob": {
-      "@type": "S3",
-      "bucket": "${R2_BUCKET}",
-      "region": {
-        "@type": "Custom",
-        "url": "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
-        "region": "auto"
-      },
-      "accessKeyId": "${R2_ACCESS_KEY}",
-      "secretKey": "${R2_SECRET_KEY}",
-      "verifyAfterWrite": true
-    }
+  "@type": "Sqlite",
+  "path": "/var/lib/postarc/postarc.db"
+}
+EOF
+
+# Write Cloudflare R2 reference config
+cat <<EOF > data/mailserver/etc/cloudflare-r2.json
+{
+  "@type": "S3",
+  "bucket": "${R2_BUCKET}",
+  "region": {
+    "@type": "Custom",
+    "url": "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+    "region": "auto"
   },
-  "server": {
-    "hostname": "${HOSTNAME}",
-    "domain": "${DOMAIN}"
-  }
+  "accessKeyId": "${R2_ACCESS_KEY}",
+  "secretKey": "${R2_SECRET_KEY}",
+  "verifyAfterWrite": true
 }
 EOF
 

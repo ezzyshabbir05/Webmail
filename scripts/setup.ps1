@@ -152,34 +152,31 @@ $envLines = @(
 )
 $envLines | Set-Content -Path ".env"
 
-# Write Postarc Mailserver config.json
+# Write Postarc Mailserver config.json (DataStore settings)
 $configJson = @"
 {
-  "store": {
-    "data": {
-      "@type": "Sqlite",
-      "path": "/var/lib/postarc/postarc.db"
-    },
-    "blob": {
-      "@type": "S3",
-      "bucket": "$r2Bucket",
-      "region": {
-        "@type": "Custom",
-        "url": "https://$r2AccountId.r2.cloudflarestorage.com",
-        "region": "auto"
-      },
-      "accessKeyId": "$r2AccessKey",
-      "secretKey": "$r2SecretKeyPlain",
-      "verifyAfterWrite": true
-    }
-  },
-  "server": {
-    "hostname": "$hostname",
-    "domain": "$domain"
-  }
+  "@type": "Sqlite",
+  "path": "/var/lib/postarc/postarc.db"
 }
 "@
 Set-Content -Path "data/mailserver/etc/config.json" -Value $configJson
+
+# Write Cloudflare R2 reference config
+$r2Json = @"
+{
+  "@type": "S3",
+  "bucket": "$r2Bucket",
+  "region": {
+    "@type": "Custom",
+    "url": "https://$r2AccountId.r2.cloudflarestorage.com",
+    "region": "auto"
+  },
+  "accessKeyId": "$r2AccessKey",
+  "secretKey": "$r2SecretKeyPlain",
+  "verifyAfterWrite": true
+}
+"@
+Set-Content -Path "data/mailserver/etc/cloudflare-r2.json" -Value $r2Json
 
 Write-Host "SUCCESS: Generated configuration and cryptographic secrets." -ForegroundColor Green
 
