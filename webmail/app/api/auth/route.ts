@@ -80,12 +80,32 @@ export async function POST(req: NextRequest) {
       sessionData = await probeRes.json()
     }
 
+    // Extract genuine primary mail account ID from JMAP session data
+    let accountId = "b"
+    if (sessionData && typeof sessionData === "object") {
+      const s = sessionData as Record<string, unknown>
+      const primaryAccounts = s.primaryAccounts as Record<string, string> | undefined
+      const accounts = s.accounts as Record<string, unknown> | undefined
+
+      if (primaryAccounts?.["urn:ietf:params:jmap:mail"]) {
+        accountId = primaryAccounts["urn:ietf:params:jmap:mail"]
+      } else if (primaryAccounts?.["urn:ietf:params:jmap:submission"]) {
+        accountId = primaryAccounts["urn:ietf:params:jmap:submission"]
+      } else if (accounts && Object.keys(accounts).length > 0) {
+        accountId = Object.keys(accounts)[0]
+      }
+    }
+
+    console.log(`[AUTH] Authenticated "${cleanEmail}" with primary accountId "${accountId}"`)
+
     // Generate secure session payload
     const sessionToken = Buffer.from(
       JSON.stringify({
         email: cleanEmail,
         auth: basicAuth,
         serverUrl: targetUrl,
+        accountId,
+        session: sessionData,
         authenticatedAt: new Date().toISOString(),
       })
     ).toString("base64")
@@ -105,7 +125,8 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      email,
+      email: cleanEmail,
+      accountId,
       serverUrl: targetUrl,
       session: sessionData,
     })
@@ -128,6 +149,8 @@ export async function GET() {
     return NextResponse.json({
       authenticated: true,
       email: decoded.email,
+      accountId: decoded.accountId || "b",
+      session: decoded.session || null,
       serverUrl: decoded.serverUrl,
     })
   } catch {

@@ -10,6 +10,7 @@ export async function POST(req: NextRequest) {
 
     let authHeader = req.headers.get("Authorization")
     let targetServer = DEFAULT_SERVER_URL
+    let accountId = "b"
 
     if (sessionCookie?.value) {
       try {
@@ -19,6 +20,9 @@ export async function POST(req: NextRequest) {
         }
         if (decoded.serverUrl) {
           targetServer = decoded.serverUrl
+        }
+        if (decoded.accountId) {
+          accountId = decoded.accountId
         }
       } catch {
         // Session decode failure
@@ -33,6 +37,19 @@ export async function POST(req: NextRequest) {
     }
 
     const body = await req.json()
+
+    // Substitute "primary" or empty accountId with user's real account ID
+    if (body?.methodCalls && Array.isArray(body.methodCalls)) {
+      for (const call of body.methodCalls) {
+        if (Array.isArray(call) && call[1] && typeof call[1] === "object") {
+          const callArgs = call[1] as Record<string, unknown>
+          if (!callArgs.accountId || callArgs.accountId === "primary") {
+            callArgs.accountId = accountId
+          }
+        }
+      }
+    }
+
     const targetUrl = `${targetServer}/jmap`
 
     const response = await fetch(targetUrl, {

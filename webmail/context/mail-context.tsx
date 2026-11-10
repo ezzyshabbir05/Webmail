@@ -122,7 +122,10 @@ interface MailContextType {
 
 const MailContext = createContext<MailContextType | null>(null)
 
-function mapJmapEmailToThread(email: JmapEmail): EmailThread {
+function mapJmapEmailToThread(
+  email: JmapEmail,
+  roleMap?: Record<string, string>
+): EmailThread {
   const isUnread = !email.keywords?.["$seen"]
   const isStarred = Boolean(email.keywords?.["$flagged"])
   const sender = email.from?.[0] || { name: "Unknown", email: "unknown@postarc.local" }
@@ -133,13 +136,27 @@ function mapJmapEmailToThread(email: JmapEmail): EmailThread {
     ? new Date(email.receivedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
     : "Now"
 
-  // Determine folder from mailboxIds or keywords
+  // Determine folder from mailboxIds or mapped mailbox roles
   let folder: EmailFolder = "inbox"
-  if (email.mailboxIds?.["trash"] || email.mailboxIds?.["Trash"]) folder = "trash"
-  else if (email.mailboxIds?.["spam"] || email.mailboxIds?.["Spam"] || email.mailboxIds?.["Junk"]) folder = "spam"
-  else if (email.mailboxIds?.["sent"] || email.mailboxIds?.["Sent"]) folder = "sent"
-  else if (email.mailboxIds?.["drafts"] || email.mailboxIds?.["Drafts"]) folder = "drafts"
-  else if (email.mailboxIds?.["archive"] || email.mailboxIds?.["Archive"]) folder = "archive"
+  for (const [mbId] of Object.entries(email.mailboxIds || {})) {
+    const role = (roleMap?.[mbId] || mbId).toLowerCase()
+    if (role === "trash") {
+      folder = "trash"
+      break
+    } else if (role === "spam" || role === "junk") {
+      folder = "spam"
+      break
+    } else if (role === "sent") {
+      folder = "sent"
+      break
+    } else if (role === "drafts" || role === "draft") {
+      folder = "drafts"
+      break
+    } else if (role === "archive") {
+      folder = "archive"
+      break
+    }
+  }
 
   const textBodyVal = Object.values(email.bodyValues || {})[0]?.value || email.preview || ""
   const htmlBodyVal = Object.values(email.bodyValues || {}).find((b) => b.value.includes("<"))?.value
@@ -244,6 +261,38 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
       if (res.ok) {
         const data = await res.json()
         if (data.authenticated) {
+          if (data.session) {
+            postarcClient.setSession(data.session)
+          }
+          if (data.accountId) {
+            postarcClient.setAccountId(data.accountId)
+          }
+          const userEmail = data.email || "admin@agilique.com"
+          setIdentities((prev) => {
+            const hasReal = prev.some((i) => i.id !== "id_default")
+            if (!hasReal) {
+              return [
+                {
+                  id: data.accountId || "id_primary",
+                  name: userEmail.split("@")[0] || "Admin",
+                  email: userEmail,
+                  isDefault: true,
+                },
+              ]
+            }
+            return prev
+          })
+          setActiveIdentity((prev) => {
+            if (prev.id === "id_default") {
+              return {
+                id: data.accountId || "id_primary",
+                name: userEmail.split("@")[0] || "Admin",
+                email: userEmail,
+                isDefault: true,
+              }
+            }
+            return prev
+          })
           setIsAuthenticated(true)
           return true
         }
@@ -260,6 +309,15 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     try {
       // Fetch Mailboxes
       const mailboxes: JmapMailbox[] = await postarcClient.getMailboxes()
+      const roleMap: Record<string, string> = {}
+      for (const m of mailboxes) {
+        if (m.role) {
+          roleMap[m.id] = m.role.toLowerCase()
+        } else if (m.name) {
+          roleMap[m.id] = m.name.toLowerCase()
+        }
+      }
+
       const customOnes: CustomMailboxFolder[] = mailboxes
         .filter((m) => !m.role)
         .map((m) => ({
@@ -276,7 +334,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
         limit: 100,
       })
 
-      const mappedThreads = jmapEmails.map(mapJmapEmailToThread)
+      const mappedThreads = jmapEmails.map((e) => mapJmapEmailToThread(e, roleMap))
       setEmails(mappedThreads)
 
       // Fetch Identities
@@ -927,7 +985,17 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
 
   // If not authenticated, display Astryx Postarc Sign-in Screen
   if (!isAuthenticated) {
-    return <PostarcAuth onSuccess={() => setIsAuthenticated(true)} />
+    return (
+      <PostarcAuth
+        onSuccess={() => {
+          checkAuth().then((authed) => {
+            if (authed) {
+              refreshMailbox()
+            }
+          })
+        }}
+      />
+    )
   }
 
   return (

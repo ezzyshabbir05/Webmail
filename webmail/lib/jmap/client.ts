@@ -20,24 +20,55 @@ import type {
 export class PostarcClient {
   private session: JmapSession | null = null
   private accountId: string | null = null
+  private mailboxCache: JmapMailbox[] = []
 
   constructor(session?: JmapSession) {
     if (session) {
       this.session = session
-      this.accountId = Object.keys(session.accounts)[0] || null
+      this.accountId =
+        session.primaryAccounts?.["urn:ietf:params:jmap:mail"] ||
+        Object.keys(session.accounts || {})[0] ||
+        null
     }
   }
 
   public setSession(session: JmapSession) {
     this.session = session
-    this.accountId = Object.keys(session.accounts)[0] || null
+    this.accountId =
+      session.primaryAccounts?.["urn:ietf:params:jmap:mail"] ||
+      Object.keys(session.accounts || {})[0] ||
+      null
+  }
+
+  public setAccountId(accountId: string) {
+    this.accountId = accountId
   }
 
   public getAccountId(): string {
     if (!this.accountId && this.session) {
-      this.accountId = Object.keys(this.session.accounts)[0] || null
+      this.accountId =
+        this.session.primaryAccounts?.["urn:ietf:params:jmap:mail"] ||
+        Object.keys(this.session.accounts || {})[0] ||
+        null
     }
-    return this.accountId || "primary"
+    return this.accountId || "b"
+  }
+
+  public async getMailboxByRole(role: string): Promise<JmapMailbox | null> {
+    if (!this.mailboxCache.length) {
+      this.mailboxCache = await this.getMailboxes()
+    }
+    const target = role.toLowerCase()
+    let match = this.mailboxCache.find(
+      (m) => m.role?.toLowerCase() === target || m.name?.toLowerCase() === target
+    )
+    if (match) return match
+    this.mailboxCache = await this.getMailboxes()
+    return (
+      this.mailboxCache.find(
+        (m) => m.role?.toLowerCase() === target || m.name?.toLowerCase() === target
+      ) || this.mailboxCache[0] || null
+    )
   }
 
   /**
@@ -80,7 +111,9 @@ export class PostarcClient {
     })
 
     const [, result] = response.methodResponses[0] || []
-    return (result?.list as JmapMailbox[]) || []
+    const list = (result?.list as JmapMailbox[]) || []
+    this.mailboxCache = list
+    return list
   }
 
   /**
@@ -210,6 +243,24 @@ export class PostarcClient {
     }
   ): Promise<void> {
     const accountId = this.getAccountId()
+    const finalUpdates: {
+      keywords?: Record<string, boolean>
+      mailboxIds?: Record<string, boolean>
+    } = { ...updates }
+
+    if (updates.mailboxIds) {
+      const resolvedMailboxIds: Record<string, boolean> = {}
+      for (const [key, val] of Object.entries(updates.mailboxIds)) {
+        const mb = await this.getMailboxByRole(key)
+        if (mb) {
+          resolvedMailboxIds[mb.id] = val
+        } else {
+          resolvedMailboxIds[key] = val
+        }
+      }
+      finalUpdates.mailboxIds = resolvedMailboxIds
+    }
+
     await this.request({
       using: ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
       methodCalls: [
@@ -218,7 +269,7 @@ export class PostarcClient {
           {
             accountId,
             update: {
-              [emailId]: updates,
+              [emailId]: finalUpdates,
             },
           },
           "c0",
@@ -264,6 +315,28 @@ export class PostarcClient {
   }): Promise<{ emailId: string; submissionId: string }> {
     const accountId = this.getAccountId()
 
+    // 1. Resolve real Drafts mailbox ID (cannot be hardcoded "drafts", must be valid document ID)
+    const draftsMailbox = await this.getMailboxByRole("drafts")
+    const draftsMailboxId = draftsMailbox?.id || "1"
+
+    // 2. Resolve real Identity & mailFrom to satisfy Stalwart's submission checks
+    let identityId = params.identityId
+    let senderEmail = params.from.email
+
+    try {
+      const identities = await this.getIdentities()
+      if (identities.length > 0) {
+        const matchingIdent =
+          identities.find(
+            (i) => i.email.toLowerCase() === params.from.email.toLowerCase()
+          ) || identities[0]
+        identityId = matchingIdent.id
+        senderEmail = matchingIdent.email
+      }
+    } catch {
+      // Use provided fallback if identity query is unavailable
+    }
+
     const bodyPartId = "body1"
     const response = await this.request({
       using: [
@@ -279,13 +352,12 @@ export class PostarcClient {
             create: {
               draftMsg: {
                 mailboxIds: {
-                  // Will be placed into Sent once submitted by Postarc Mailserver
-                  drafts: true,
+                  [draftsMailboxId]: true,
                 },
                 keywords: {
                   $seen: true,
                 },
-                from: [params.from],
+                from: [{ name: params.from.name || "", email: senderEmail }],
                 to: params.to,
                 cc: params.cc,
                 bcc: params.bcc,
@@ -333,10 +405,10 @@ export class PostarcClient {
             onSuccessDestroyEmail: ["#createEmail/created/draftMsg/id"],
             create: {
               sendMsg: {
-                identityId: params.identityId,
+                identityId,
                 emailId: "#createEmail/created/draftMsg/id",
                 envelope: {
-                  mailFrom: params.from,
+                  mailFrom: { email: senderEmail },
                   rcptTo: [...params.to, ...(params.cc || []), ...(params.bcc || [])],
                 },
               },
@@ -347,8 +419,26 @@ export class PostarcClient {
       ],
     })
 
+    // Inspect responses for errors
+    for (const [methodName, resultObj] of response.methodResponses) {
+      if (methodName === "error") {
+        const err = resultObj as { type: string; description?: string }
+        throw new Error(err.description || err.type || "JMAP call rejected")
+      }
+    }
+
     const [, emailSetResult] = response.methodResponses[0] || []
     const [, submissionSetResult] = response.methodResponses[1] || []
+
+    const emailNotCreated = (emailSetResult as { notCreated?: Record<string, { type: string; description?: string }> })?.notCreated?.draftMsg
+    if (emailNotCreated) {
+      throw new Error(`Email draft failed: ${emailNotCreated.description || emailNotCreated.type}`)
+    }
+
+    const submissionNotCreated = (submissionSetResult as { notCreated?: Record<string, { type: string; description?: string }> })?.notCreated?.sendMsg
+    if (submissionNotCreated) {
+      throw new Error(`Email submission failed: ${submissionNotCreated.description || submissionNotCreated.type}`)
+    }
 
     const emailId =
       (emailSetResult as { created?: Record<string, { id: string }> })?.created?.draftMsg?.id || ""
