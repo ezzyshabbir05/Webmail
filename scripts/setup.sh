@@ -125,6 +125,7 @@ fi
 echo ""
 echo -e "${BOLD}--- [4/5] Preparing Directories & Cryptographic Keys ---${NC}"
 mkdir -p data/mailserver/etc data/mailserver/var data/webmail webmail/public
+chown -R 2000:2000 data/mailserver 2>/dev/null || chmod -R 777 data/mailserver 2>/dev/null || true
 
 # Generate DKIM Ed25519 Key if not exists
 DKIM_KEY_PATH="data/mailserver/etc/dkim-ed25519.key"
@@ -185,6 +186,9 @@ cat <<EOF > data/mailserver/etc/cloudflare-r2.json
   "verifyAfterWrite": true
 }
 EOF
+
+# Ensure container user (UID 2000) owns all mounted data and config directories
+chown -R 2000:2000 data/mailserver 2>/dev/null || chmod -R 777 data/mailserver 2>/dev/null || true
 
 echo -e "${GREEN}✓ Generated configuration and cryptographic secrets.${NC}"
 
