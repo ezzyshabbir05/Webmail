@@ -40,8 +40,8 @@ export function PostarcAuth({ onSuccess }: PostarcAuthProps) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email,
-          password,
+          email: email.trim(),
+          password: password.trim(),
           serverUrl: serverUrl.trim() || undefined,
         }),
       })

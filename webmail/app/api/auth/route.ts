@@ -14,8 +14,12 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const targetUrl = serverUrl || DEFAULT_SERVER_URL
-    const basicAuth = Buffer.from(`${email}:${password}`).toString("base64")
+    const cleanEmail = String(email).trim().toLowerCase()
+    const cleanPassword = String(password).trim()
+    const targetUrl = (serverUrl && String(serverUrl).trim()) || DEFAULT_SERVER_URL
+    const basicAuth = Buffer.from(`${cleanEmail}:${cleanPassword}`).toString("base64")
+
+    console.log(`[AUTH] Attempting login for "${cleanEmail}" against "${targetUrl}/jmap/session"`)
 
     // Attempt to authenticate against Postarc Mailserver direct JMAP session endpoint
     const jmapSessionUrl = `${targetUrl}/jmap/session`
@@ -27,8 +31,11 @@ export async function POST(req: NextRequest) {
       },
     })
 
+    console.log(`[AUTH] Mailserver /jmap/session response: ${res.status} ${res.statusText}`)
+
     if (res.status === 404) {
       // Fallback to .well-known/jmap
+      console.log(`[AUTH] Falling back to ${targetUrl}/.well-known/jmap`)
       res = await fetch(`${targetUrl}/.well-known/jmap`, {
         method: "GET",
         headers: {
@@ -36,6 +43,7 @@ export async function POST(req: NextRequest) {
           Accept: "application/json",
         },
       })
+      console.log(`[AUTH] /.well-known/jmap response: ${res.status} ${res.statusText}`)
     }
 
     if (!res.ok && res.status !== 404) {
@@ -75,7 +83,7 @@ export async function POST(req: NextRequest) {
     // Generate secure session payload
     const sessionToken = Buffer.from(
       JSON.stringify({
-        email,
+        email: cleanEmail,
         auth: basicAuth,
         serverUrl: targetUrl,
         authenticatedAt: new Date().toISOString(),
