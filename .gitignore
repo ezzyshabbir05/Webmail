@@ -1,23 +1,23 @@
 # Dependencies
-node_modules/
-webmail/node_modules/
+/node_modules/
+/webmail/node_modules/
 .pnp
 .pnp.js
 
 # Build outputs
-.next/
-webmail/.next/
-out/
-build/
-dist/
-target/
-server/target/
+/.next/
+/webmail/.next/
+/out/
+/build/
+/dist/
+/target/
+/server/target/
 *.tsbuildinfo
 
 # Runtime storage & secrets
 .env
 .env*.local
-data/
+/data/
 *.db
 *.sqlite
 
@@ -26,7 +26,7 @@ data/
 *.pem
 
 # Logs & temp
-logs/
+/logs/
 *.log
 npm-debug.log*
 
