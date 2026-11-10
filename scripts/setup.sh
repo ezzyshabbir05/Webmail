@@ -151,6 +151,7 @@ fi
 cat <<EOF > .env
 POSTARC_DOMAIN=${DOMAIN}
 POSTARC_HOSTNAME=${HOSTNAME}
+ADMIN_USER=${ADMIN_EMAIL%@*}
 ADMIN_EMAIL=${ADMIN_EMAIL}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 
@@ -163,29 +164,9 @@ POSTARC_SERVER_URL=http://postarc-mailserver:8080
 NEXT_PUBLIC_APP_NAME="Postarc Webmail"
 EOF
 
-# Write Postarc Mailserver config.json (DataStore settings)
-cat <<EOF > data/mailserver/etc/config.json
-{
-  "@type": "Sqlite",
-  "path": "/var/lib/postarc/postarc.db"
-}
-EOF
-
-# Write Cloudflare R2 reference config
-cat <<EOF > data/mailserver/etc/cloudflare-r2.json
-{
-  "@type": "S3",
-  "bucket": "${R2_BUCKET}",
-  "region": {
-    "@type": "Custom",
-    "url": "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
-    "region": "auto"
-  },
-  "accessKeyId": "${R2_ACCESS_KEY}",
-  "secretKey": "${R2_SECRET_KEY}",
-  "verifyAfterWrite": true
-}
-EOF
+# Ensure data directories exist and are writable
+mkdir -p data/mailserver/var
+chmod -R 777 data/mailserver 2>/dev/null || true
 
 # Ensure container user (UID 2000) owns all mounted data and config directories
 chown -R 2000:2000 data/mailserver 2>/dev/null || chmod -R 777 data/mailserver 2>/dev/null || true

@@ -1,140 +1,48 @@
-[workspace]
-resolver = "2"
-members = [
-    "crates/main",
-    "crates/types",
-    "crates/http",
-    "crates/http-proto",
-    "crates/jmap",
-    "crates/jmap-proto",
-    "crates/email",
-    "crates/imap",
-    "crates/imap-proto",
-    "crates/smtp",
-    "crates/managesieve",
-    "crates/pop3",
-    "crates/dav-proto",
-    "crates/scim-proto",
-    "crates/scim",
-    "crates/dav",
-    "crates/groupware",
-    "crates/spam-filter",
-    "crates/nlp",
-    "crates/store",
-    "crates/coordinator",
-    "crates/directory",
-    "crates/registry",
-    "crates/services",
-    "crates/utils",
-    "crates/common",
-    "crates/trc",
-    "crates/telemetry",
-    "crates/text-extract",
-    "crates/smtp-proto",
-    "crates/smtp-report",
-    "crates/calcard",
-    "crates/sieve",
-    "crates/jmap-tools",
-    "crates/s3",
-    "crates/crypto",
-]
-default-members = [
-    "crates/main",
-    "crates/types",
-    "crates/http",
-    "crates/http-proto",
-    "crates/jmap",
-    "crates/jmap-proto",
-    "crates/email",
-    "crates/imap",
-    "crates/imap-proto",
-    "crates/smtp",
-    "crates/managesieve",
-    "crates/pop3",
-    "crates/dav-proto",
-    "crates/scim-proto",
-    "crates/scim",
-    "crates/dav",
-    "crates/groupware",
-    "crates/spam-filter",
-    "crates/nlp",
-    "crates/store",
-    "crates/coordinator",
-    "crates/directory",
-    "crates/registry",
-    "crates/services",
-    "crates/utils",
-    "crates/common",
-    "crates/trc",
-    "crates/telemetry",
-    "crates/text-extract",
-    "crates/smtp-proto",
-    "crates/smtp-report",
-    "crates/calcard",
-    "crates/sieve",
-    "crates/jmap-tools",
-    "crates/s3",
-    "crates/crypto",
-]
+[package]
+name = "postarc-server"
+version = "1.0.0"
+edition = "2021"
+authors = ["Postarc Team <hello@postarc.local>"]
+description = "Modern, high-performance unified mail server built from scratch"
 
-[workspace.dependencies]
-rkyv = { version = "0.8.18", features = ["little_endian", "unaligned"] }
+[dependencies]
+# Async Runtime & Networking
+tokio = { version = "1.43", features = ["full"] }
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+rustls-pki-types = "1.10"
+rcgen = { version = "0.13", features = ["pem", "ring"] }
+webpki-roots = "0.26"
 
-[workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(stalwart_tests)'] }
+# HTTP Web Framework & Middleware
+axum = { version = "0.8", features = ["json", "tokio"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower = { version = "0.5" }
 
-[workspace.lints.clippy]
-result_unit_err = "allow"
+# Database (Bundled SQLite with zero external C dependencies)
+rusqlite = { version = "0.32", features = ["bundled", "chrono", "uuid"] }
+parking_lot = "0.12"
 
-[profile.dev]
-opt-level = 0
-debug = 1
-lto = false
-incremental = true
-panic = 'unwind'
-debug-assertions = true
-overflow-checks = false
-rpath = false
+# Email Standards & MIME
+mail-parser = { version = "1.0", features = ["full_encoding"] }
+mail-builder = "2.0"
+mail-auth = { version = "0.15", default-features = false, features = ["rustls"] }
 
-[profile.dev.package.argon2]
-opt-level = 3
+# DNS MX & TXT Resolution
+hickory-resolver = { version = "0.24", features = ["tokio-runtime"] }
 
-[profile.dev.package.blake2]
-opt-level = 3
+# Cryptography & Security
+argon2 = "0.5"
+rsa = { version = "0.9", features = ["pkcs8", "pem"] }
+rand = "0.8"
+base64 = "0.22"
+sha2 = "0.10"
 
-[profile.release]
-opt-level = 3
-debug = false
-codegen-units = 1
-lto = true
-incremental = false
-panic = 'unwind'
-debug-assertions = false
-overflow-checks = false
-rpath = false
-strip = true
-
-[profile.test]
-opt-level = 0
-debug = 1
-lto = false
-incremental = true
-debug-assertions = true
-overflow-checks = true
-rpath = false
-
-[profile.bench]
-opt-level = 3
-debug = false
-codegen-units = 1
-lto = true
-incremental = false
-debug-assertions = false
-overflow-checks = false
-rpath = false
-
-[patch.crates-io]
-hickory-proto = { git = "https://github.com/stalwartlabs/hickory-dns", branch = "stalwart/0.26" }
-hickory-net = { git = "https://github.com/stalwartlabs/hickory-dns", branch = "stalwart/0.26" }
-hickory-resolver = { git = "https://github.com/stalwartlabs/hickory-dns", branch = "stalwart/0.26" }
-librocksdb-sys = { git = "https://github.com/stalwartlabs/rust-rocksdb", branch = "stalwart/0.25" }
+# Serialization & Utilities
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.11", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
