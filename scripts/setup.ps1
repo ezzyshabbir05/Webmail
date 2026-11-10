@@ -14,47 +14,117 @@ try {
     $serverIp = (Invoke-RestMethod -Uri "https://api.ipify.org" -TimeoutSec 3).Trim()
 } catch {}
 
-# 1. Domain & Hostname
-Write-Host "--- [1/5] Domain & Hostname Setup ---" -ForegroundColor Yellow
-$domain = Read-Host "Enter your mail domain [e.g. example.com]"
-if ([string]::IsNullOrWhiteSpace($domain)) {
-    Write-Error "Error: Domain is required."
-    exit 1
+# Read existing .env if present
+$existingEnv = @{}
+if (Test-Path ".env") {
+    Get-Content ".env" | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -and -not $line.StartsWith("#") -and $line.Contains("=")) {
+            $parts = $line.Split("=", 2)
+            $existingEnv[$parts[0].Trim()] = $parts[1].Trim().Trim('"').Trim("'")
+        }
+    }
 }
 
-$defaultHostname = "mail.$domain"
-$hostname = Read-Host "Enter mailserver hostname [default: $defaultHostname]"
-if ([string]::IsNullOrWhiteSpace($hostname)) { $hostname = $defaultHostname }
-
-# 2. Administrator Account
-Write-Host ""
-Write-Host "--- [2/5] Administrator Account ---" -ForegroundColor Yellow
-$defaultAdmin = "admin@$domain"
-$adminEmail = Read-Host "Enter admin email [default: $defaultAdmin]"
-if ([string]::IsNullOrWhiteSpace($adminEmail)) { $adminEmail = $defaultAdmin }
-
-$adminPassword = Read-Host "Enter admin password [press enter to auto-generate]"
-if ([string]::IsNullOrWhiteSpace($adminPassword)) {
-    $adminPassword = -join ((65..90) + (97..122) + (48..57) | Get-Random -Count 16 | ForEach-Object { [char]$_ })
+$useExisting = $false
+if ($existingEnv["POSTARC_DOMAIN"] -and $existingEnv["ADMIN_EMAIL"] -and $existingEnv["CLOUDFLARE_R2_ACCOUNT_ID"]) {
+    Write-Host "Detected existing configuration in .env:" -ForegroundColor Yellow
+    Write-Host ("  Domain:        " + $existingEnv["POSTARC_DOMAIN"])
+    Write-Host ("  Hostname:      " + $existingEnv["POSTARC_HOSTNAME"])
+    Write-Host ("  Admin:         " + $existingEnv["ADMIN_EMAIL"])
+    Write-Host ("  Cloudflare R2: " + $existingEnv["CLOUDFLARE_R2_BUCKET_NAME"])
+    Write-Host ""
+    $confirm = Read-Host "Use existing .env configuration? [Y/n]"
+    if ([string]::IsNullOrWhiteSpace($confirm) -or $confirm.ToUpper() -eq "Y") {
+        $useExisting = $true
+        $domain = $existingEnv["POSTARC_DOMAIN"]
+        $hostname = $existingEnv["POSTARC_HOSTNAME"]
+        $adminEmail = $existingEnv["ADMIN_EMAIL"]
+        $adminPassword = $existingEnv["ADMIN_PASSWORD"]
+        $r2AccountId = $existingEnv["CLOUDFLARE_R2_ACCOUNT_ID"]
+        $r2AccessKey = $existingEnv["CLOUDFLARE_R2_ACCESS_KEY_ID"]
+        $r2SecretKeyPlain = $existingEnv["CLOUDFLARE_R2_SECRET_ACCESS_KEY"]
+        $r2Bucket = $existingEnv["CLOUDFLARE_R2_BUCKET_NAME"]
+    }
 }
 
-# 3. Cloudflare R2 Object Storage
-Write-Host ""
-Write-Host "--- [3/5] Cloudflare R2 Object Storage (Attachments and Blobs) ---" -ForegroundColor Yellow
-Write-Host "Postarc uses Cloudflare R2 (S3-compatible) for blob and attachment storage."
-$r2AccountId = Read-Host "Enter Cloudflare Account ID"
-$r2AccessKey = Read-Host "Enter Cloudflare R2 Access Key ID"
-$r2SecretKey = Read-Host "Enter Cloudflare R2 Secret Access Key" -AsSecureString
-$bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($r2SecretKey)
-$r2SecretKeyPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+if (-not $useExisting) {
+    # 1. Domain & Hostname
+    Write-Host "--- [1/5] Domain & Hostname Setup ---" -ForegroundColor Yellow
+    $defDomain = if ($existingEnv["POSTARC_DOMAIN"]) { $existingEnv["POSTARC_DOMAIN"] } else { "" }
+    if ($defDomain) {
+        $domain = Read-Host "Enter your mail domain [default: $defDomain]"
+        if ([string]::IsNullOrWhiteSpace($domain)) { $domain = $defDomain }
+    } else {
+        $domain = Read-Host "Enter your mail domain [e.g. example.com]"
+    }
+    if ([string]::IsNullOrWhiteSpace($domain)) {
+        Write-Error "Error: Domain is required."
+        exit 1
+    }
 
-$r2Bucket = Read-Host "Enter Cloudflare R2 Bucket Name [default: postarc-blobs]"
-if ([string]::IsNullOrWhiteSpace($r2Bucket)) { $r2Bucket = "postarc-blobs" }
+    $defaultHostname = if ($existingEnv["POSTARC_HOSTNAME"]) { $existingEnv["POSTARC_HOSTNAME"] } else { "mail.$domain" }
+    $hostname = Read-Host "Enter mailserver hostname [default: $defaultHostname]"
+    if ([string]::IsNullOrWhiteSpace($hostname)) { $hostname = $defaultHostname }
+
+    # 2. Administrator Account
+    Write-Host ""
+    Write-Host "--- [2/5] Administrator Account ---" -ForegroundColor Yellow
+    $defaultAdmin = if ($existingEnv["ADMIN_EMAIL"]) { $existingEnv["ADMIN_EMAIL"] } else { "admin@$domain" }
+    $adminEmail = Read-Host "Enter admin email [default: $defaultAdmin]"
+    if ([string]::IsNullOrWhiteSpace($adminEmail)) { $adminEmail = $defaultAdmin }
+
+    $defaultPass = if ($existingEnv["ADMIN_PASSWORD"]) { $existingEnv["ADMIN_PASSWORD"] } else { "" }
+    $adminPassword = Read-Host "Enter admin password [press enter to auto-generate]"
+    if ([string]::IsNullOrWhiteSpace($adminPassword)) {
+        if ($defaultPass) {
+            $adminPassword = $defaultPass
+        } else {
+            $adminPassword = -join ((65..90) + (97..122) + (48..57) | Get-Random -Count 16 | ForEach-Object { [char]$_ })
+        }
+    }
+
+    # 3. Cloudflare R2 Object Storage
+    Write-Host ""
+    Write-Host "--- [3/5] Cloudflare R2 Object Storage (Attachments and Blobs) ---" -ForegroundColor Yellow
+    Write-Host "Postarc uses Cloudflare R2 (S3-compatible) for blob and attachment storage."
+    $defR2Acc = if ($existingEnv["CLOUDFLARE_R2_ACCOUNT_ID"]) { $existingEnv["CLOUDFLARE_R2_ACCOUNT_ID"] } else { "" }
+    if ($defR2Acc) {
+        $r2AccountId = Read-Host "Enter Cloudflare Account ID [default: $defR2Acc]"
+        if ([string]::IsNullOrWhiteSpace($r2AccountId)) { $r2AccountId = $defR2Acc }
+    } else {
+        $r2AccountId = Read-Host "Enter Cloudflare Account ID"
+    }
+
+    $defR2Key = if ($existingEnv["CLOUDFLARE_R2_ACCESS_KEY_ID"]) { $existingEnv["CLOUDFLARE_R2_ACCESS_KEY_ID"] } else { "" }
+    if ($defR2Key) {
+        $r2AccessKey = Read-Host "Enter Cloudflare R2 Access Key ID [default: $defR2Key]"
+        if ([string]::IsNullOrWhiteSpace($r2AccessKey)) { $r2AccessKey = $defR2Key }
+    } else {
+        $r2AccessKey = Read-Host "Enter Cloudflare R2 Access Key ID"
+    }
+
+    $defR2Sec = if ($existingEnv["CLOUDFLARE_R2_SECRET_ACCESS_KEY"]) { $existingEnv["CLOUDFLARE_R2_SECRET_ACCESS_KEY"] } else { "" }
+    if ($defR2Sec) {
+        $r2SecretKey = Read-Host "Enter Cloudflare R2 Secret Access Key [press enter to keep existing]" -AsSecureString
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($r2SecretKey)
+        $r2SecretKeyPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+        if ([string]::IsNullOrWhiteSpace($r2SecretKeyPlain)) { $r2SecretKeyPlain = $defR2Sec }
+    } else {
+        $r2SecretKey = Read-Host "Enter Cloudflare R2 Secret Access Key" -AsSecureString
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($r2SecretKey)
+        $r2SecretKeyPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+    }
+
+    $defR2Bkt = if ($existingEnv["CLOUDFLARE_R2_BUCKET_NAME"]) { $existingEnv["CLOUDFLARE_R2_BUCKET_NAME"] } else { "postarc-blobs" }
+    $r2Bucket = Read-Host "Enter Cloudflare R2 Bucket Name [default: $defR2Bkt]"
+    if ([string]::IsNullOrWhiteSpace($r2Bucket)) { $r2Bucket = $defR2Bkt }
+}
 
 # 4. Preparing Directories & Cryptographic Secrets
 Write-Host ""
 Write-Host "--- [4/5] Preparing Directories and Configuration ---" -ForegroundColor Yellow
-New-Item -ItemType Directory -Force -Path "data/mailserver/etc", "data/mailserver/var", "data/webmail" | Out-Null
+New-Item -ItemType Directory -Force -Path "data/mailserver/etc", "data/mailserver/var", "data/webmail", "webmail/public" | Out-Null
 
 $dkimPubKey = "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC3postarc"
 

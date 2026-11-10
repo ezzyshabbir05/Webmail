@@ -23,56 +23,125 @@ echo -e "${NC}"
 # Detect Public IP
 SERVER_IP=$(curl -s https://api.ipify.org || echo "YOUR_SERVER_IP")
 
-# 1. Configuration Prompts
-echo -e "${BOLD}--- [1/5] Domain & Hostname Setup ---${NC}"
-read -rp "Enter your mail domain [e.g. example.com]: " DOMAIN
-if [ -z "$DOMAIN" ]; then
-    echo -e "${RED}Error: Domain is required.${NC}"
-    exit 1
+# Load existing .env if present
+USE_EXISTING_ENV=false
+if [ -f ".env" ]; then
+    echo -e "${YELLOW}Detected existing .env file.${NC}"
+    # Source .env safely
+    set -a
+    # shellcheck disable=SC1091
+    source .env || true
+    set +a
+
+    if [ -n "${POSTARC_DOMAIN:-}" ] && [ -n "${ADMIN_EMAIL:-}" ] && [ -n "${CLOUDFLARE_R2_ACCOUNT_ID:-}" ]; then
+        echo -e "${GREEN}Valid configuration found in .env:${NC}"
+        echo -e "  Domain:         ${POSTARC_DOMAIN}"
+        echo -e "  Hostname:       ${POSTARC_HOSTNAME:-mail.${POSTARC_DOMAIN}}"
+        echo -e "  Admin:          ${ADMIN_EMAIL}"
+        echo -e "  Cloudflare R2:  ${CLOUDFLARE_R2_BUCKET_NAME:-postarc-blobs}"
+        echo ""
+        read -rp "Use existing .env configuration? [Y/n]: " CONFIRM_ENV
+        CONFIRM_ENV=${CONFIRM_ENV:-Y}
+        if [[ "$CONFIRM_ENV" =~ ^[Yy]$ ]]; then
+            USE_EXISTING_ENV=true
+            DOMAIN="${POSTARC_DOMAIN}"
+            HOSTNAME="${POSTARC_HOSTNAME:-mail.${DOMAIN}}"
+            ADMIN_EMAIL="${ADMIN_EMAIL}"
+            ADMIN_PASSWORD="${ADMIN_PASSWORD}"
+            R2_ACCOUNT_ID="${CLOUDFLARE_R2_ACCOUNT_ID}"
+            R2_ACCESS_KEY="${CLOUDFLARE_R2_ACCESS_KEY_ID}"
+            R2_SECRET_KEY="${CLOUDFLARE_R2_SECRET_ACCESS_KEY}"
+            R2_BUCKET="${CLOUDFLARE_R2_BUCKET_NAME:-postarc-blobs}"
+        fi
+    fi
 fi
 
-DEFAULT_HOSTNAME="mail.${DOMAIN}"
-read -rp "Enter mailserver hostname [default: ${DEFAULT_HOSTNAME}]: " HOSTNAME
-HOSTNAME=${HOSTNAME:-$DEFAULT_HOSTNAME}
+if [ "$USE_EXISTING_ENV" = false ]; then
+    # 1. Configuration Prompts
+    echo -e "${BOLD}--- [1/5] Domain & Hostname Setup ---${NC}"
+    DEFAULT_DOMAIN="${POSTARC_DOMAIN:-}"
+    if [ -n "$DEFAULT_DOMAIN" ]; then
+        read -rp "Enter your mail domain [default: ${DEFAULT_DOMAIN}]: " DOMAIN
+        DOMAIN=${DOMAIN:-$DEFAULT_DOMAIN}
+    else
+        read -rp "Enter your mail domain [e.g. example.com]: " DOMAIN
+    fi
 
-echo ""
-echo -e "${BOLD}--- [2/5] Administrator Account ---${NC}"
-DEFAULT_ADMIN="admin@${DOMAIN}"
-read -rp "Enter admin email [default: ${DEFAULT_ADMIN}]: " ADMIN_EMAIL
-ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN}
+    if [ -z "$DOMAIN" ]; then
+        echo -e "${RED}Error: Domain is required.${NC}"
+        exit 1
+    fi
 
-# Generate random secure password if blank
-RANDOM_PASS=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 16)
-read -rp "Enter admin password [press enter to auto-generate]: " ADMIN_PASSWORD
-ADMIN_PASSWORD=${ADMIN_PASSWORD:-$RANDOM_PASS}
+    DEFAULT_HOSTNAME="${POSTARC_HOSTNAME:-mail.${DOMAIN}}"
+    read -rp "Enter mailserver hostname [default: ${DEFAULT_HOSTNAME}]: " HOSTNAME
+    HOSTNAME=${HOSTNAME:-$DEFAULT_HOSTNAME}
 
-echo ""
-echo -e "${BOLD}--- [3/5] Cloudflare R2 Object Storage (Attachments & Blobs) ---${NC}"
-echo "Postarc uses Cloudflare R2 (S3-compatible) for blob and attachment storage."
-read -rp "Enter Cloudflare Account ID: " R2_ACCOUNT_ID
-read -rp "Enter Cloudflare R2 Access Key ID: " R2_ACCESS_KEY
-read -rsp "Enter Cloudflare R2 Secret Access Key: " R2_SECRET_KEY
-echo ""
-read -rp "Enter Cloudflare R2 Bucket Name [default: postarc-blobs]: " R2_BUCKET
-R2_BUCKET=${R2_BUCKET:-postarc-blobs}
+    echo ""
+    echo -e "${BOLD}--- [2/5] Administrator Account ---${NC}"
+    DEFAULT_ADMIN="${ADMIN_EMAIL:-admin@${DOMAIN}}"
+    read -rp "Enter admin email [default: ${DEFAULT_ADMIN}]: " ADMIN_EMAIL
+    ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN}
+
+    # Generate random secure password if blank
+    RANDOM_PASS=$(openssl rand -base64 16 2>/dev/null | tr -dc 'a-zA-Z0-9' | head -c 16 || echo "PostarcPass2026")
+    DEFAULT_PASS="${ADMIN_PASSWORD:-$RANDOM_PASS}"
+    read -rp "Enter admin password [press enter to auto-generate]: " ADMIN_PASSWORD
+    ADMIN_PASSWORD=${ADMIN_PASSWORD:-$DEFAULT_PASS}
+
+    echo ""
+    echo -e "${BOLD}--- [3/5] Cloudflare R2 Object Storage (Attachments & Blobs) ---${NC}"
+    echo "Postarc uses Cloudflare R2 (S3-compatible) for blob and attachment storage."
+    DEFAULT_R2_ACC="${CLOUDFLARE_R2_ACCOUNT_ID:-}"
+    if [ -n "$DEFAULT_R2_ACC" ]; then
+        read -rp "Enter Cloudflare Account ID [default: ${DEFAULT_R2_ACC}]: " R2_ACCOUNT_ID
+        R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-$DEFAULT_R2_ACC}
+    else
+        read -rp "Enter Cloudflare Account ID: " R2_ACCOUNT_ID
+    fi
+
+    DEFAULT_R2_KEY="${CLOUDFLARE_R2_ACCESS_KEY_ID:-}"
+    if [ -n "$DEFAULT_R2_KEY" ]; then
+        read -rp "Enter Cloudflare R2 Access Key ID [default: ${DEFAULT_R2_KEY}]: " R2_ACCESS_KEY
+        R2_ACCESS_KEY=${R2_ACCESS_KEY:-$DEFAULT_R2_KEY}
+    else
+        read -rp "Enter Cloudflare R2 Access Key ID: " R2_ACCESS_KEY
+    fi
+
+    DEFAULT_R2_SEC="${CLOUDFLARE_R2_SECRET_ACCESS_KEY:-}"
+    if [ -n "$DEFAULT_R2_SEC" ]; then
+        read -rsp "Enter Cloudflare R2 Secret Access Key [press enter to keep existing]: " R2_SECRET_KEY
+        echo ""
+        R2_SECRET_KEY=${R2_SECRET_KEY:-$DEFAULT_R2_SEC}
+    else
+        read -rsp "Enter Cloudflare R2 Secret Access Key: " R2_SECRET_KEY
+        echo ""
+    fi
+
+    DEFAULT_R2_BKT="${CLOUDFLARE_R2_BUCKET_NAME:-postarc-blobs}"
+    read -rp "Enter Cloudflare R2 Bucket Name [default: ${DEFAULT_R2_BKT}]: " R2_BUCKET
+    R2_BUCKET=${R2_BUCKET:-$DEFAULT_R2_BKT}
+fi
 
 echo ""
 echo -e "${BOLD}--- [4/5] Preparing Directories & Cryptographic Keys ---${NC}"
-mkdir -p data/mailserver/etc data/mailserver/var data/webmail
+mkdir -p data/mailserver/etc data/mailserver/var data/webmail webmail/public
 
-# Generate DKIM Ed25519 Key
+# Generate DKIM Ed25519 Key if not exists
 DKIM_KEY_PATH="data/mailserver/etc/dkim-ed25519.key"
 DKIM_PUB_PATH="data/mailserver/etc/dkim-ed25519.pub"
 
-if command -v openssl >/dev/null 2>&1; then
+if [ ! -f "$DKIM_KEY_PATH" ] && command -v openssl >/dev/null 2>&1; then
     openssl genpkey -algorithm ed25519 -out "$DKIM_KEY_PATH" 2>/dev/null || true
     openssl pkey -in "$DKIM_KEY_PATH" -pubout -out "$DKIM_PUB_PATH" 2>/dev/null || true
+fi
+
+if [ -f "$DKIM_PUB_PATH" ]; then
     DKIM_PUB_KEY=$(grep -v -- '-----' "$DKIM_PUB_PATH" | tr -d '\n' || echo "GENERATE_KEY_AFTER_BOOT")
 else
     DKIM_PUB_KEY="MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC3..."
 fi
 
-# Generate .env file
+# Write .env file
 cat <<EOF > .env
 POSTARC_DOMAIN=${DOMAIN}
 POSTARC_HOSTNAME=${HOSTNAME}
@@ -88,7 +157,7 @@ POSTARC_SERVER_URL=http://postarc-mailserver:8080
 NEXT_PUBLIC_APP_NAME="Postarc Webmail"
 EOF
 
-# Generate Postarc Mailserver config.json
+# Write Postarc Mailserver config.json
 cat <<EOF > data/mailserver/etc/config.json
 {
   "store": {
