@@ -82,10 +82,14 @@ export async function POST(req: NextRequest) {
       })
     ).toString("base64")
 
+    const isHttps =
+      req.nextUrl.protocol === "https:" ||
+      req.headers.get("x-forwarded-proto") === "https"
+
     const cookieStore = await cookies()
     cookieStore.set("postarc_session", sessionToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
+      secure: isHttps,
       sameSite: "lax",
       path: "/",
       maxAge: 60 * 60 * 24 * 30, // 30 days
