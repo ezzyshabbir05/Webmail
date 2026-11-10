@@ -12,7 +12,7 @@
     "start": "npm --prefix webmail run start",
     "lint": "npm --prefix webmail run lint",
     "doctor": "npm --prefix webmail run doctor",
-    "setup": "powershell -ExecutionPolicy Bypass -File ./scripts/setup.ps1",
+    "setup": "node scripts/setup.js",
     "setup:sh": "bash ./scripts/setup.sh",
     "docker:up": "docker compose -f docker/docker-compose.yml up -d",
     "docker:down": "docker compose -f docker/docker-compose.yml down",

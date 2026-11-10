@@ -159,5 +159,5 @@ if command -v docker >/dev/null 2>&1; then
     echo -e "Attachments & Blobs:   ${CYAN}Cloudflare R2 Bucket [${R2_BUCKET}]${NC}"
     echo "=========================================================================="
 else
-    echo -e "${YELLOW}Docker is not installed or not in PATH. Configuration generated in .env and data/postarc/etc/config.json.${NC}"
+    echo -e "${YELLOW}Docker is not installed or not in PATH. Configuration generated in .env and data/mailserver/etc/config.json.${NC}"
 fi
