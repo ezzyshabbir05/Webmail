@@ -1,0 +1,161 @@
+"use client"
+
+import React, { useState } from "react"
+import {
+  Card,
+  VStack,
+  HStack,
+  Heading,
+  Text,
+  TextInput,
+  Button,
+  Banner,
+  Icon,
+} from "@astryxdesign/core"
+
+interface PostarcAuthProps {
+  onSuccess: () => void
+}
+
+export function PostarcAuth({ onSuccess }: PostarcAuthProps) {
+  const [email, setEmail] = useState("")
+  const [password, setPassword] = useState("")
+  const [serverUrl, setServerUrl] = useState("")
+  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  const handleSignIn = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!email || !password) {
+      setErrorMessage("Please enter both email and password")
+      return
+    }
+
+    setIsLoading(true)
+    setErrorMessage(null)
+
+    try {
+      const res = await fetch("/api/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          password,
+          serverUrl: serverUrl.trim() || undefined,
+        }),
+      })
+
+      const data = await res.json()
+
+      if (!res.ok) {
+        setErrorMessage(data.error || "Authentication failed")
+        setIsLoading(false)
+        return
+      }
+
+      onSuccess()
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Network error connecting to Postarc")
+      setIsLoading(false)
+    }
+  }
+
+  return (
+    <VStack
+      align="center"
+      justify="center"
+      className="w-full min-h-screen bg-canvas p-4"
+    >
+      <Card width={420} elevation="med" padding={4}>
+        <form onSubmit={handleSignIn}>
+          <VStack gap={5}>
+            <VStack gap={2} align="center" className="text-center">
+              <VStack
+                align="center"
+                justify="center"
+                className="w-12 h-12 rounded-xl bg-primary text-primary-foreground"
+              >
+                <Icon icon="info" size="lg" />
+              </VStack>
+              <Heading level={2}>Postarc Webmail</Heading>
+              <Text type="supporting">
+                Sign in to your Postarc Mail account
+              </Text>
+            </VStack>
+
+            {errorMessage && (
+              <Banner
+                status="error"
+                title="Authentication Error"
+                description={errorMessage}
+                isDismissable
+                onDismiss={() => setErrorMessage(null)}
+              />
+            )}
+
+            <VStack gap={4}>
+              <TextInput
+                label="Email Address"
+                type="email"
+                value={email}
+                onChange={(val) => setEmail(val)}
+                placeholder="name@yourdomain.com"
+                autoComplete="email"
+                hasAutoFocus
+                isRequired
+                width="100%"
+              />
+
+              <TextInput
+                label="Password"
+                type="password"
+                value={password}
+                onChange={(val) => setPassword(val)}
+                placeholder="••••••••••••"
+                autoComplete="current-password"
+                isRequired
+                width="100%"
+              />
+
+              {showAdvanced && (
+                <TextInput
+                  label="Postarc Mailserver Host"
+                  type="url"
+                  value={serverUrl}
+                  onChange={(val) => setServerUrl(val)}
+                  placeholder="http://127.0.0.1:8080"
+                  description="Leave blank to use default host (http://127.0.0.1:8080)"
+                  width="100%"
+                />
+              )}
+
+              <HStack justify="between" align="center">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  label={showAdvanced ? "Hide Host Config" : "Custom Mail Server"}
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                />
+              </HStack>
+
+              <Button
+                variant="primary"
+                label={isLoading ? "Connecting to Postarc..." : "Sign In"}
+                isLoading={isLoading}
+                width="100%"
+                type="submit"
+              />
+            </VStack>
+
+            <VStack gap={1} align="center" className="text-center">
+              <Text size="xsm" type="supporting">
+                Postarc Mail Server &amp; Cloudflare R2 Connected
+              </Text>
+            </VStack>
+          </VStack>
+        </form>
+      </Card>
+    </VStack>
+  )
+}

@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+webmail/node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+.next/
+webmail/.next/
+out/
+build/
+dist/
+target/
+server/target/
+*.tsbuildinfo
+
+# Runtime storage & secrets
+.env
+.env*.local
+data/
+*.db
+*.sqlite
+
+# Cryptographic keys
+*.key
+*.pem
+
+# Logs & temp
+logs/
+*.log
+npm-debug.log*
+
+# OS / Editor artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

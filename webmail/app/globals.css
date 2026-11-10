@@ -1,0 +1,62 @@
+@layer reset, theme, base, astryx-base, astryx-theme, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "@astryxdesign/core/reset.css";
+@import "@astryxdesign/core/astryx.css";
+@import "@astryxdesign/theme-neutral/theme.css";
+@import "@astryxdesign/core/tailwind-theme.css";
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@custom-variant dark (&:where(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *));
+
+/* Ensure Astryx light-dark() tokens and color-scheme honor next-themes before React hydration completes */
+@layer utilities {
+  html.dark,
+  html.dark [data-astryx-theme]:not([data-theme="light"]),
+  [data-theme="dark"] {
+    --lightningcss-light: ;
+    --lightningcss-dark: initial;
+    color-scheme: dark;
+  }
+
+  html.light,
+  html.light [data-astryx-theme]:not([data-theme="dark"]),
+  [data-theme="light"] {
+    --lightningcss-light: initial;
+    --lightningcss-dark: ;
+    color-scheme: light;
+  }
+}
+
+/* AppShell aesthetic styling */
+.astryx-app-shell {
+  --radius-page: 1.2rem;
+}
+
+/* Zero-height empty table header in headerless email list: collapses vertical gap while preserving fixed column widths */
+.mail-table-headerless thead tr {
+  height: 0 !important;
+  line-height: 0 !important;
+}
+
+.mail-table-headerless thead th {
+  padding-block: 0 !important;
+  height: 0 !important;
+  border-bottom: none !important;
+  line-height: 0 !important;
+  font-size: 0 !important;
+}
+
+/* Ensure email table leading and trailing cells align precisely with the 16px content line */
+.mail-table-headerless tbody td:first-child {
+  padding-inline-start: var(--spacing-4) !important;
+}
+
+.mail-table-headerless tbody td:last-child {
+  padding-inline-end: var(--spacing-4) !important;
+}
+
+.mail-table-headerless tbody td {
+  padding-block: var(--spacing-1-5) !important;
+}

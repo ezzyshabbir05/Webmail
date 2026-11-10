@@ -1,0 +1,56 @@
+{
+  "store": {
+    "data": {
+      "@type": "Sqlite",
+      "path": "/var/lib/postarc/postarc.db"
+    },
+    "blob": {
+      "@type": "S3",
+      "bucket": "${CLOUDFLARE_R2_BUCKET_NAME}",
+      "region": {
+        "@type": "Custom",
+        "url": "https://${CLOUDFLARE_R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+        "region": "auto"
+      },
+      "accessKeyId": "${CLOUDFLARE_R2_ACCESS_KEY_ID}",
+      "secretKey": "${CLOUDFLARE_R2_SECRET_ACCESS_KEY}",
+      "verifyAfterWrite": true
+    }
+  },
+  "server": {
+    "hostname": "${POSTARC_HOSTNAME}",
+    "domain": "${POSTARC_DOMAIN}"
+  },
+  "listener": {
+    "smtp": {
+      "bind": ["0.0.0.0:25", "[::]:25"],
+      "protocol": "smtp"
+    },
+    "submission": {
+      "bind": ["0.0.0.0:587", "[::]:587"],
+      "protocol": "smtp"
+    },
+    "smtps": {
+      "bind": ["0.0.0.0:465", "[::]:465"],
+      "protocol": "smtp",
+      "tls": {
+        "implicit": true
+      }
+    },
+    "imaps": {
+      "bind": ["0.0.0.0:993", "[::]:993"],
+      "protocol": "imap",
+      "tls": {
+        "implicit": true
+      }
+    },
+    "http": {
+      "bind": ["0.0.0.0:8080", "[::]:8080"],
+      "protocol": "http"
+    },
+    "sieve": {
+      "bind": ["0.0.0.0:4190", "[::]:4190"],
+      "protocol": "managesieve"
+    }
+  }
+}

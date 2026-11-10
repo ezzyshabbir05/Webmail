@@ -1,0 +1,18 @@
+{
+  "$schema": "https://postarc.local/schemas/r2-storage-v1.json",
+  "description": "Cloudflare R2 Object Storage Backend Configuration for Postarc",
+  "provider": "Cloudflare R2",
+  "protocol": "S3-compatible (AWS SigV4)",
+  "urlStyle": "Path",
+  "endpointTemplate": "https://${ACCOUNT_ID}.r2.cloudflarestorage.com",
+  "region": "auto",
+  "parameters": {
+    "accountId": "${CLOUDFLARE_R2_ACCOUNT_ID}",
+    "accessKeyId": "${CLOUDFLARE_R2_ACCESS_KEY_ID}",
+    "secretAccessKey": "${CLOUDFLARE_R2_SECRET_ACCESS_KEY}",
+    "bucketName": "${CLOUDFLARE_R2_BUCKET_NAME}",
+    "verifyAfterWrite": true,
+    "maxRetries": 3,
+    "timeoutSeconds": 30
+  }
+}

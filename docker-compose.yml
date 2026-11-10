@@ -1,0 +1,58 @@
+version: "3.8"
+
+services:
+  postarc-mailserver:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: postarc-mailserver
+    restart: unless-stopped
+    ports:
+      - "25:25"       # SMTP (MTA Inbound)
+      - "465:465"     # SMTPS (MTA Outbound TLS)
+      - "587:587"     # Submission (Client Submission)
+      - "993:993"     # IMAPS (IMAP over TLS)
+      - "4190:4190"   # ManageSieve (Filter scripts)
+      - "8080:8080"   # JMAP / HTTP API / Push SSE
+    volumes:
+      - ./data/mailserver/etc:/etc/postarc
+      - ./data/mailserver/var:/var/lib/postarc
+    environment:
+      - STALWART_HOSTNAME=${POSTARC_HOSTNAME:-mail.example.com}
+      - STALWART_PUBLIC_URL=http://${POSTARC_HOSTNAME:-mail.example.com}:8080
+      - CLOUDFLARE_R2_ACCOUNT_ID=${CLOUDFLARE_R2_ACCOUNT_ID}
+      - CLOUDFLARE_R2_ACCESS_KEY_ID=${CLOUDFLARE_R2_ACCESS_KEY_ID}
+      - CLOUDFLARE_R2_SECRET_ACCESS_KEY=${CLOUDFLARE_R2_SECRET_ACCESS_KEY}
+      - CLOUDFLARE_R2_BUCKET_NAME=${CLOUDFLARE_R2_BUCKET_NAME}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - postarc-network
+
+  postarc-webmail:
+    build:
+      context: ./webmail
+      dockerfile: Dockerfile
+    container_name: postarc-webmail
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - POSTARC_SERVER_URL=http://postarc-mailserver:8080
+      - POSTARC_HOSTNAME=${POSTARC_HOSTNAME:-mail.example.com}
+      - CLOUDFLARE_R2_BUCKET_NAME=${CLOUDFLARE_R2_BUCKET_NAME}
+    depends_on:
+      postarc-mailserver:
+        condition: service_healthy
+    networks:
+      - postarc-network
+
+networks:
+  postarc-network:
+    driver: bridge

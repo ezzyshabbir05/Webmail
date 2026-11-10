@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Postarc Unified Mail System - Turnkey Docker Setup Script
+# Configures: Postarc Mailserver + Postarc Webmail + Cloudflare R2 + SQLite/Postgres
+# ==============================================================================
+
+set -euo pipefail
+
+# ANSI color codes
+BOLD='\033[1m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+echo -e "${CYAN}${BOLD}"
+echo "=========================================================================="
+echo "          POSTARC UNIFIED MAIL SYSTEM - TURNKEY PROVISIONING WIZARD       "
+echo "=========================================================================="
+echo -e "${NC}"
+
+# Detect Public IP
+SERVER_IP=$(curl -s https://api.ipify.org || echo "YOUR_SERVER_IP")
+
+# 1. Configuration Prompts
+echo -e "${BOLD}--- [1/5] Domain & Hostname Setup ---${NC}"
+read -rp "Enter your mail domain [e.g. example.com]: " DOMAIN
+if [ -z "$DOMAIN" ]; then
+    echo -e "${RED}Error: Domain is required.${NC}"
+    exit 1
+fi
+
+DEFAULT_HOSTNAME="mail.${DOMAIN}"
+read -rp "Enter mailserver hostname [default: ${DEFAULT_HOSTNAME}]: " HOSTNAME
+HOSTNAME=${HOSTNAME:-$DEFAULT_HOSTNAME}
+
+echo ""
+echo -e "${BOLD}--- [2/5] Administrator Account ---${NC}"
+DEFAULT_ADMIN="admin@${DOMAIN}"
+read -rp "Enter admin email [default: ${DEFAULT_ADMIN}]: " ADMIN_EMAIL
+ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN}
+
+# Generate random secure password if blank
+RANDOM_PASS=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9' | head -c 16)
+read -rp "Enter admin password [press enter to auto-generate]: " ADMIN_PASSWORD
+ADMIN_PASSWORD=${ADMIN_PASSWORD:-$RANDOM_PASS}
+
+echo ""
+echo -e "${BOLD}--- [3/5] Cloudflare R2 Object Storage (Attachments & Blobs) ---${NC}"
+echo "Postarc uses Cloudflare R2 (S3-compatible) for blob and attachment storage."
+read -rp "Enter Cloudflare Account ID: " R2_ACCOUNT_ID
+read -rp "Enter Cloudflare R2 Access Key ID: " R2_ACCESS_KEY
+read -rsp "Enter Cloudflare R2 Secret Access Key: " R2_SECRET_KEY
+echo ""
+read -rp "Enter Cloudflare R2 Bucket Name [default: postarc-blobs]: " R2_BUCKET
+R2_BUCKET=${R2_BUCKET:-postarc-blobs}
+
+echo ""
+echo -e "${BOLD}--- [4/5] Preparing Directories & Cryptographic Keys ---${NC}"
+mkdir -p data/mailserver/etc data/mailserver/var data/webmail
+
+# Generate DKIM Ed25519 Key
+DKIM_KEY_PATH="data/mailserver/etc/dkim-ed25519.key"
+DKIM_PUB_PATH="data/mailserver/etc/dkim-ed25519.pub"
+
+if command -v openssl >/dev/null 2>&1; then
+    openssl genpkey -algorithm ed25519 -out "$DKIM_KEY_PATH" 2>/dev/null || true
+    openssl pkey -in "$DKIM_KEY_PATH" -pubout -out "$DKIM_PUB_PATH" 2>/dev/null || true
+    DKIM_PUB_KEY=$(grep -v -- '-----' "$DKIM_PUB_PATH" | tr -d '\n' || echo "GENERATE_KEY_AFTER_BOOT")
+else
+    DKIM_PUB_KEY="MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC3..."
+fi
+
+# Generate .env file
+cat <<EOF > .env
+POSTARC_DOMAIN=${DOMAIN}
+POSTARC_HOSTNAME=${HOSTNAME}
+ADMIN_EMAIL=${ADMIN_EMAIL}
+ADMIN_PASSWORD=${ADMIN_PASSWORD}
+
+CLOUDFLARE_R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
+CLOUDFLARE_R2_ACCESS_KEY_ID=${R2_ACCESS_KEY}
+CLOUDFLARE_R2_SECRET_ACCESS_KEY=${R2_SECRET_KEY}
+CLOUDFLARE_R2_BUCKET_NAME=${R2_BUCKET}
+
+POSTARC_SERVER_URL=http://postarc-mailserver:8080
+NEXT_PUBLIC_APP_NAME="Postarc Webmail"
+EOF
+
+# Generate Postarc Mailserver config.json
+cat <<EOF > data/mailserver/etc/config.json
+{
+  "store": {
+    "data": {
+      "@type": "Sqlite",
+      "path": "/var/lib/postarc/postarc.db"
+    },
+    "blob": {
+      "@type": "S3",
+      "bucket": "${R2_BUCKET}",
+      "region": {
+        "@type": "Custom",
+        "url": "https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+        "region": "auto"
+      },
+      "accessKeyId": "${R2_ACCESS_KEY}",
+      "secretKey": "${R2_SECRET_KEY}",
+      "verifyAfterWrite": true
+    }
+  },
+  "server": {
+    "hostname": "${HOSTNAME}",
+    "domain": "${DOMAIN}"
+  }
+}
+EOF
+
+echo -e "${GREEN}✓ Generated configuration and cryptographic secrets.${NC}"
+
+# 5. Display Cloudflare DNS Setup Table
+echo ""
+echo -e "${YELLOW}${BOLD}=========================================================================="
+echo "                 REQUIRED CLOUDFLARE DNS RECORDS TO CONFIGURE             "
+echo "==========================================================================${NC}"
+echo "Add the following DNS records in your Cloudflare DNS Dashboard for '${DOMAIN}':"
+echo ""
+printf "%-8s %-30s %-40s %-10s\n" "TYPE" "NAME" "CONTENT / VALUE" "PROXY"
+echo "--------------------------------------------------------------------------------------"
+printf "%-8s %-30s %-40s %-10s\n" "A" "${HOSTNAME}" "${SERVER_IP}" "DNS only"
+printf "%-8s %-30s %-40s %-10s\n" "MX" "@" "${HOSTNAME} (Priority: 10)" "DNS only"
+printf "%-8s %-30s %-40s %-10s\n" "TXT" "@" "v=spf1 mx ip4:${SERVER_IP} ~all" "DNS only"
+printf "%-8s %-30s %-40s %-10s\n" "TXT" "postarc._domainkey" "v=DKIM1; k=ed25519; p=${DKIM_PUB_KEY}" "DNS only"
+printf "%-8s %-30s %-40s %-10s\n" "TXT" "_dmarc" "v=DMARC1; p=quarantine; rua=mailto:${ADMIN_EMAIL}" "DNS only"
+echo "--------------------------------------------------------------------------------------"
+echo ""
+
+# 6. Launch Docker Stack
+echo -e "${BOLD}--- [5/5] Launching Unified Docker Stack ---${NC}"
+if command -v docker >/dev/null 2>&1; then
+    echo "Starting Postarc Mailserver and Postarc Webmail..."
+    if docker compose version >/dev/null 2>&1; then
+        docker compose up -d --build
+    else
+        docker-compose up -d --build
+    fi
+
+    echo ""
+    echo -e "${GREEN}${BOLD}=========================================================================="
+    echo "                      POSTARC IS LIVE AND READY!                         "
+    echo "==========================================================================${NC}"
+    echo -e "Webmail UI:            ${CYAN}http://localhost:3000${NC} (or https://${HOSTNAME})"
+    echo -e "JMAP & HTTP Gateway:   ${CYAN}http://localhost:8080${NC}"
+    echo -e "SMTP Inbound (MTA):    ${CYAN}Port 25${NC}"
+    echo -e "SMTP Submission:       ${CYAN}Port 587${NC}"
+    echo -e "IMAPS (Secure IMAP):   ${CYAN}Port 993${NC}"
+    echo -e "Admin Account:         ${CYAN}${ADMIN_EMAIL}${NC}"
+    echo -e "Admin Password:        ${CYAN}${ADMIN_PASSWORD}${NC}"
+    echo -e "Attachments & Blobs:   ${CYAN}Cloudflare R2 Bucket [${R2_BUCKET}]${NC}"
+    echo "=========================================================================="
+else
+    echo -e "${YELLOW}Docker is not installed or not in PATH. Configuration generated in .env and data/postarc/etc/config.json.${NC}"
+fi
