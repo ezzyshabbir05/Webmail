@@ -14,14 +14,14 @@ RUN case "${TARGETPLATFORM}" in \
     esac
 RUN export DEBIAN_FRONTEND=noninteractive && \
     apt-get update && \
-    apt-get install -yq --no-install-recommends build-essential libclang-dev \
+    apt-get install -yq --no-install-recommends build-essential libclang-19-dev \
     g++-aarch64-linux-gnu binutils-aarch64-linux-gnu \
     g++-x86-64-linux-gnu binutils-x86-64-linux-gnu
 RUN rustup target add "$(cat /target.txt)"
 COPY --from=planner /recipe.json /recipe.json
-RUN RUSTFLAGS="$(cat /flags.txt)" cargo chef cook --target "$(cat /target.txt)" --release --no-default-features --features "sqlite postgres s3 enterprise" --recipe-path /recipe.json
+RUN RUSTFLAGS="$(cat /flags.txt)" cargo chef cook --target "$(cat /target.txt)" --release --no-default-features --features "sqlite postgres mysql rocks s3 redis keep azure nats enterprise" --recipe-path /recipe.json
 COPY . .
-RUN RUSTFLAGS="$(cat /flags.txt)" cargo build --target "$(cat /target.txt)" --release -p postarc --no-default-features --features "sqlite postgres s3 enterprise"
+RUN RUSTFLAGS="$(cat /flags.txt)" cargo build --target "$(cat /target.txt)" --release -p stalwart --no-default-features --features "sqlite postgres mysql rocks s3 redis keep azure nats enterprise"
 RUN mv "/build/target/$(cat /target.txt)/release" "/output"
 
 FROM docker.io/debian:trixie-slim
@@ -33,8 +33,9 @@ RUN export DEBIAN_FRONTEND=noninteractive && \
     useradd -r -u 2000 -g 2000 -s /usr/sbin/nologin -M postarc && \
     mkdir -p /etc/postarc /var/lib/postarc && \
     chown postarc:postarc /etc/postarc /var/lib/postarc
-COPY --from=builder --chmod=0755 /output/postarc /usr/local/bin/postarc-mailserver
+COPY --from=builder --chmod=0755 /output/stalwart /usr/local/bin/postarc-mailserver
 RUN ln -s /usr/local/bin/postarc-mailserver /usr/local/bin/postarc && \
+    ln -s /usr/local/bin/postarc-mailserver /usr/local/bin/stalwart && \
     setcap 'cap_net_bind_service=+ep' /usr/local/bin/postarc-mailserver
 USER postarc
 WORKDIR /var/lib/postarc

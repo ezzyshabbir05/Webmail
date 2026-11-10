@@ -1,20 +1,17 @@
 [package]
-name = "postarc"
-description = "Postarc Mailserver - High-Performance Mail and Collaboration Server with Cloudflare R2"
-authors = ["Postarc Team"]
-homepage = "https://postarc.local"
-keywords = ["imap", "jmap", "smtp", "email", "mail", "server"]
+name = "stalwart"
+description = "Stalwart Mail and Collaboration Server"
+authors = [ "Stalwart Labs LLC <hello@stalw.art>"]
+repository = "https://github.com/stalwartlabs/stalwart"
+homepage = "https://stalw.art"
+keywords = ["imap", "jmap", "smtp", "email", "mail", "webdav", "server"]
 categories = ["email"]
 license = "AGPL-3.0-only OR LicenseRef-SEL"
 version = "1.1.0"
 edition = "2024"
 
 [[bin]]
-name = "postarc-mailserver"
-path = "src/main.rs"
-
-[[bin]]
-name = "postarc"
+name = "stalwart"
 path = "src/main.rs"
 
 [dependencies]
@@ -53,7 +50,9 @@ tikv-jemallocator = "0.7"
 tikv-jemallocator = { version = "0.7", features = ["unprefixed_malloc_on_supported_platforms"] }
 
 [features]
-default = ["sqlite", "postgres", "s3", "enterprise"]
+#default = ["sqlite", "postgres", "mysql", "rocks", "s3", "redis", "azure", "nats", "enterprise", "zenoh", "kafka"]
+#default = ["sqlite", "postgres", "mysql", "rocks", "s3", "redis", "azure", "nats", "enterprise"]
+default = ["rocks", "enterprise", "keep"]
 sqlite = ["store/sqlite", "directory/sqlite"]
 foundationdb = ["store/foundation", "common/foundation"]
 postgres = ["store/postgres", "directory/postgres"]
