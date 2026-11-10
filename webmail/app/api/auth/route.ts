@@ -17,15 +17,26 @@ export async function POST(req: NextRequest) {
     const targetUrl = serverUrl || DEFAULT_SERVER_URL
     const basicAuth = Buffer.from(`${email}:${password}`).toString("base64")
 
-    // Attempt to authenticate against Postarc Mailserver JMAP session endpoint
-    const jmapSessionUrl = `${targetUrl}/.well-known/jmap`
-    const res = await fetch(jmapSessionUrl, {
+    // Attempt to authenticate against Postarc Mailserver direct JMAP session endpoint
+    const jmapSessionUrl = `${targetUrl}/jmap/session`
+    let res = await fetch(jmapSessionUrl, {
       method: "GET",
       headers: {
         Authorization: `Basic ${basicAuth}`,
         Accept: "application/json",
       },
     })
+
+    if (res.status === 404) {
+      // Fallback to .well-known/jmap
+      res = await fetch(`${targetUrl}/.well-known/jmap`, {
+        method: "GET",
+        headers: {
+          Authorization: `Basic ${basicAuth}`,
+          Accept: "application/json",
+        },
+      })
+    }
 
     if (!res.ok && res.status !== 404) {
       // If unauthorized or error from mailserver
