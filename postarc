@@ -1,0 +1,518 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# Postarc Mailserver: Turnkey Production Setup & Unified Management CLI
+# ==============================================================================
+
+set -euo pipefail
+
+# Resolve project root even if invoked via symlink
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SCRIPT_SOURCE" ]; do
+    SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+    SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+    [[ $SCRIPT_SOURCE != /* ]] && SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
+done
+PROJECT_ROOT="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+cd "${PROJECT_ROOT}"
+
+# ANSI Colors
+CYAN='\033[0;36m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+BOLD='\033[1m'
+NC='\033[0m'
+
+# Determine Docker Compose Command
+if docker compose version &> /dev/null; then
+    COMPOSE_CMD="docker compose"
+elif command -v docker-compose &> /dev/null; then
+    COMPOSE_CMD="docker-compose"
+else
+    COMPOSE_CMD=""
+fi
+
+COMPOSE_FILE="docker-compose.yml"
+if [ -f "docker-compose.prod.yml" ] && [ "${POSTARC_STACK_TYPE:-}" = "prod" ]; then
+    COMPOSE_FILE="docker-compose.prod.yml"
+fi
+
+get_exec_flags() {
+    if [ -t 0 ] && [ -t 1 ]; then
+        echo "-it"
+    else
+        echo "-T"
+    fi
+}
+
+print_banner() {
+    echo -e "${CYAN}"
+    echo "  ██████╗  ██████╗ ███████╗████████╗ █████╗ ██████╗  ██████╗ "
+    echo "  ██╔══██╗██╔═══██╗██╔════╝╚══██╔══╝██╔══██╗██╔══██╗██╔════╝ "
+    echo "  ██████╔╝██║   ██║███████╗   ██║   ███████║██████╔╝██║      "
+    echo "  ██╔═══╝ ██║   ██║╚════██║   ██║   ██╔══██║██╔══██╗██║      "
+    echo "  ██║     ╚██████╔╝███████║   ██║   ██║  ██║██║  ██║╚██████╗ "
+    echo "  ╚═╝      ╚═════╝ ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ "
+    echo "  Postarc Mailserver - Enterprise Production Engine & Management CLI"
+    echo -e "${NC}"
+}
+
+print_usage() {
+    print_banner
+    echo -e "${BOLD}Usage:${NC} postarc [COMMAND] [OPTIONS]"
+    echo ""
+    echo -e "${BOLD}Core Commands:${NC}"
+    echo "  setup                    Run interactive turnkey production setup wizard"
+    echo "  doctor [DOMAIN]          Run system diagnostics and verify live DNS records"
+    echo "  status                   Show running status, container health, and open ports"
+    echo "  logs [-f]                View live structured daemon logs"
+    echo "  start                    Start the mailserver stack"
+    echo "  stop                     Stop the mailserver stack"
+    echo "  restart                  Gracefully restart the mailserver daemon"
+    echo "  update                   Pull latest updates from Git, recompile, and hot-reload"
+    echo ""
+    echo -e "${BOLD}User & Mailbox Management:${NC}"
+    echo "  user add <EMAIL> [--password <PWD>] [--quota-gb <GB>]   Create an email account"
+    echo "  user list                                               List all user accounts"
+    echo "  user password <EMAIL>                                   Reset password for an account"
+    echo "  user delete <EMAIL>                                     Delete an account and mailboxes"
+    echo ""
+    echo -e "${BOLD}Domain & Routing Management:${NC}"
+    echo "  domain add <DOMAIN>      Add a hosted domain"
+    echo "  domain list              List all hosted domains"
+    echo "  domain remove <DOMAIN>   Remove a hosted domain"
+    echo "  alias add <SRC> <TGT>    Add an alias or catch-all (e.g. '@example.com' 'user@example.com')"
+    echo "  alias list               List all virtual aliases"
+    echo "  alias remove <SRC>       Remove a virtual alias"
+    echo ""
+    echo -e "${BOLD}Security & Cryptography:${NC}"
+    echo "  dkim generate <DOMAIN> [--selector mail]   Generate 2048-bit RSA DKIM key in database"
+    echo "  dkim export <DOMAIN> [--selector mail]     Export DNS TXT record for DNS provider"
+    echo "  cert request [HOSTNAME]                    Request/renew Let's Encrypt certificate"
+    echo "  cert status                                Check current SSL/TLS certificate expiry"
+    echo ""
+}
+
+ensure_docker() {
+    if [ -z "${COMPOSE_CMD}" ]; then
+        echo -e "${YELLOW}Docker / Docker Compose not found. Installing...${NC}"
+        if ! command -v docker &> /dev/null; then
+            curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+            sh /tmp/get-docker.sh
+            rm -f /tmp/get-docker.sh
+            systemctl enable --now docker || true
+        fi
+        if command -v apt-get &> /dev/null; then
+            apt-get update -qq && apt-get install -y -qq docker-compose-plugin || true
+        fi
+        if docker compose version &> /dev/null; then
+            COMPOSE_CMD="docker compose"
+        elif command -v docker-compose &> /dev/null; then
+            COMPOSE_CMD="docker-compose"
+        else
+            echo -e "${RED}Failed to install Docker Compose. Please install Docker Compose manually.${NC}"
+            exit 1
+        fi
+    fi
+}
+
+run_container_cli() {
+    ensure_docker
+    local flags
+    flags=$(get_exec_flags)
+    if ! ${COMPOSE_CMD} -f "${COMPOSE_FILE}" ps --status running | grep -q "postarc"; then
+        echo -e "${YELLOW}Notice: Postarc container is not currently running. Starting services...${NC}"
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d
+        sleep 2
+    fi
+    ${COMPOSE_CMD} -f "${COMPOSE_FILE}" exec ${flags} postarc postarc "$@"
+}
+
+install_host_symlink() {
+    if [ "$(id -u)" -eq 0 ]; then
+        ln -sf "${PROJECT_ROOT}/postarc" /usr/local/bin/postarc
+        chmod +x "${PROJECT_ROOT}/postarc"
+        echo -e "${GREEN}Installed system CLI: 'postarc' is now available globally from any directory.${NC}"
+    fi
+}
+
+run_setup_wizard() {
+    print_banner
+    echo -e "${BOLD}${CYAN}=== Postarc Turnkey Production Setup Wizard ===${NC}"
+    echo ""
+
+    ensure_docker
+
+    # 1. Install prerequisites
+    if [ "$(id -u)" -eq 0 ]; then
+        echo -e "${CYAN}Checking essential system packages...${NC}"
+        if command -v apt-get &> /dev/null; then
+            apt-get update -qq && apt-get install -y -qq curl openssl certbot ufw dnsutils || true
+        elif command -v yum &> /dev/null; then
+            yum install -y curl openssl certbot bind-utils || true
+        fi
+    fi
+
+    # 2. Existing configuration detection
+    if [ -f .env ]; then
+        echo -e "${YELLOW}Existing .env configuration detected.${NC}"
+        read -rp "Do you want to reconfigure environment settings? (y/N): " RECONFIG_CHOICE
+        if [[ ! "${RECONFIG_CHOICE}" =~ ^[Yy]$ ]]; then
+            echo -e "${GREEN}Preserving existing .env configuration.${NC}"
+            set -a
+            # shellcheck disable=SC1091
+            [ -f .env ] && . ./.env
+            set +a
+        else
+            configure_env
+        fi
+    else
+        configure_env
+    fi
+
+    # 3. Detect Public IP
+    VPS_IP=$(curl -s https://api.ipify.org || curl -s https://icanhazip.com || curl -s https://ifconfig.me || echo "YOUR_VPS_IP")
+
+    # 4. SSL/TLS Certificate Setup (Zero Hardcoding)
+    echo ""
+    echo -e "${BOLD}${CYAN}=== SSL/TLS Certificate Configuration (Let's Encrypt) ===${NC}"
+    LE_CERT="/etc/letsencrypt/live/${MAIL_HOSTNAME}/fullchain.pem"
+    LE_KEY="/etc/letsencrypt/live/${MAIL_HOSTNAME}/privkey.pem"
+
+    if [ -f "${LE_CERT}" ] && [ -f "${LE_KEY}" ]; then
+        echo -e "${GREEN}Found valid Let's Encrypt certificate for ${MAIL_HOSTNAME}!${NC}"
+        TLS_CERT_PATH="${LE_CERT}"
+        TLS_KEY_PATH="${LE_KEY}"
+    else
+        echo "No certificate found for '${MAIL_HOSTNAME}' at ${LE_CERT}."
+        echo "1) Request official Let's Encrypt certificate now (via certbot standalone)"
+        echo "2) Proceed with self-signed certificate (attach Let's Encrypt later)"
+        read -rp "Select certificate option [1]: " CERT_CHOICE
+        CERT_CHOICE="${CERT_CHOICE:-1}"
+
+        if [ "${CERT_CHOICE}" = "1" ]; then
+            if ! command -v certbot &> /dev/null && [ "$(id -u)" -eq 0 ]; then
+                apt-get update -qq && apt-get install -y -qq certbot || true
+            fi
+            echo -e "${YELLOW}Requesting certificate for ${MAIL_HOSTNAME}...${NC}"
+            if certbot certonly --standalone --non-interactive --agree-tos -m "${ACME_EMAIL}" -d "${MAIL_HOSTNAME}"; then
+                echo -e "${GREEN}Certificate successfully acquired!${NC}"
+                TLS_CERT_PATH="${LE_CERT}"
+                TLS_KEY_PATH="${LE_KEY}"
+            else
+                echo -e "${YELLOW}Certbot standalone did not complete (ensure Port 80 is open and DNS points to ${VPS_IP}).${NC}"
+                echo -e "${YELLOW}Postarc will use dynamic fallback paths once cert is obtained.${NC}"
+                TLS_CERT_PATH="${LE_CERT}"
+                TLS_KEY_PATH="${LE_KEY}"
+            fi
+        else
+            TLS_CERT_PATH="${LE_CERT}"
+            TLS_KEY_PATH="${LE_KEY}"
+        fi
+    fi
+
+    # Update .env with TLS paths
+    if grep -q "TLS_CERT_PATH=" .env 2>/dev/null; then
+        sed -i "s|TLS_CERT_PATH=.*|TLS_CERT_PATH=${TLS_CERT_PATH}|" .env
+        sed -i "s|TLS_KEY_PATH=.*|TLS_KEY_PATH=${TLS_KEY_PATH}|" .env
+    else
+        echo "TLS_CERT_PATH=${TLS_CERT_PATH}" >> .env
+        echo "TLS_KEY_PATH=${TLS_KEY_PATH}" >> .env
+    fi
+
+    # 5. UFW Firewall Setup
+    if command -v ufw &> /dev/null && [ "$(id -u)" -eq 0 ]; then
+        echo -e "${CYAN}Configuring UFW Firewall ports...${NC}"
+        ufw allow 22/tcp comment 'SSH' >/dev/null 2>&1 || true
+        ufw allow 25/tcp comment 'SMTP Inbound MTA' >/dev/null 2>&1 || true
+        ufw allow 143/tcp comment 'IMAP STARTTLS' >/dev/null 2>&1 || true
+        ufw allow 465/tcp comment 'SMTPS' >/dev/null 2>&1 || true
+        ufw allow 587/tcp comment 'SMTP Submission' >/dev/null 2>&1 || true
+        ufw allow 993/tcp comment 'IMAPS' >/dev/null 2>&1 || true
+        ufw allow 80/tcp comment 'HTTP ACME' >/dev/null 2>&1 || true
+        ufw allow 443/tcp comment 'HTTPS' >/dev/null 2>&1 || true
+        ufw allow 8080/tcp comment 'JMAP HTTP' >/dev/null 2>&1 || true
+        echo -e "${GREEN}Firewall rules updated.${NC}"
+    fi
+
+    # 6. Start Containers
+    echo ""
+    echo -e "${CYAN}Building and launching Postarc containers...${NC}"
+    ${COMPOSE_CMD} -f "${COMPOSE_FILE}" build
+    ${COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d
+
+    # 7. Provision Default Domain & Admin User in Database
+    echo -e "${CYAN}Provisioning domain '${MAIL_DOMAIN}' and admin '${ADMIN_EMAIL}' in database...${NC}"
+    sleep 3
+    ${COMPOSE_CMD} -f "${COMPOSE_FILE}" exec -T postarc postarc domain add "${MAIL_DOMAIN}" >/dev/null 2>&1 || true
+    ${COMPOSE_CMD} -f "${COMPOSE_FILE}" exec -T postarc postarc user add "${ADMIN_EMAIL}" --password "${ADMIN_PASSWORD}" --quota-gb 50 >/dev/null 2>&1 || true
+
+    # 8. Generate & Export DKIM Key
+    echo -e "${CYAN}Generating 2048-bit RSA DKIM key in database...${NC}"
+    ${COMPOSE_CMD} -f "${COMPOSE_FILE}" exec -T postarc postarc dkim generate "${MAIL_DOMAIN}" --selector mail >/dev/null 2>&1 || true
+
+    # 9. Install Global Symlink
+    install_host_symlink
+
+    # 10. Display Production DNS Records Checklist
+    echo ""
+    echo -e "${GREEN}==============================================================================${NC}"
+    echo -e "${GREEN}           CRITICAL: CONFIGURE THESE DNS RECORDS AT YOUR PROVIDER             ${NC}"
+    echo -e "${GREEN}==============================================================================${NC}"
+    echo -e "${YELLOW}Domain: ${BOLD}${MAIL_DOMAIN}${NC}  |  ${YELLOW}Mail Hostname: ${BOLD}${MAIL_HOSTNAME}${NC}  |  ${YELLOW}Server IP: ${BOLD}${VPS_IP}${NC}"
+    echo ""
+
+    # Export DKIM record
+    DKIM_EXPORT=$(${COMPOSE_CMD} -f "${COMPOSE_FILE}" exec -T postarc postarc dkim export "${MAIL_DOMAIN}" --selector mail 2>/dev/null | grep "v=DKIM1" | tr -d '\r' | sed 's/^[ \t]*Value:[ \t]*//')
+    DKIM_VAL="${DKIM_EXPORT:-v=DKIM1; k=rsa; p=YOUR_PUBLIC_KEY}"
+
+    printf "%-6s | %-32s | %-8s | %s\n" "TYPE" "NAME" "PRIORITY" "VALUE"
+    echo "--------------------------------------------------------------------------------------------------"
+    printf "%-6s | %-32s | %-8s | %s\n" "A" "${MAIL_HOSTNAME}." "-" "${VPS_IP}"
+    printf "%-6s | %-32s | %-8s | %s\n" "MX" "@" "10" "${MAIL_HOSTNAME}."
+    printf "%-6s | %-32s | %-8s | %s\n" "TXT" "@" "-" "v=spf1 mx a:${MAIL_HOSTNAME} -all"
+    printf "%-6s | %-32s | %-8s | %s\n" "TXT" "mail._domainkey" "-" "${DKIM_VAL}"
+    printf "%-6s | %-32s | %-8s | %s\n" "TXT" "_dmarc" "-" "v=DMARC1; p=quarantine; pct=100; rua=mailto:${ADMIN_EMAIL}"
+    printf "%-6s | %-32s | %-8s | %s\n" "CNAME" "mta-sts" "-" "${MAIL_HOSTNAME}."
+    printf "%-6s | %-32s | %-8s | %s\n" "TXT" "_mta-sts" "-" "v=STSv1; id=$(date +%Y%m%d%H%M)"
+    echo "--------------------------------------------------------------------------------------------------"
+
+    echo ""
+    echo -e "${CYAN}Important DNS Notes:${NC}"
+    echo "  1. On Cloudflare: Set Proxy Status to 'DNS only' (Grey Cloud) for all mail records!"
+    echo "  2. Reverse DNS (PTR): In your VPS cloud provider console, set Reverse DNS for ${VPS_IP} to: ${MAIL_HOSTNAME}"
+    echo ""
+    echo -e "${GREEN}==============================================================================${NC}"
+    echo -e "${GREEN}                  POSTARC MAILSERVER IS ONLINE AND READY!                     ${NC}"
+    echo -e "${GREEN}==============================================================================${NC}"
+    echo -e "  Admin Account:  ${BOLD}${ADMIN_EMAIL}${NC}"
+    echo -e "  Admin Password: ${BOLD}${ADMIN_PASSWORD}${NC}"
+    echo -e "  IMAP (Ports):   993 (SSL/TLS), 143 (STARTTLS)"
+    echo -e "  SMTP (Ports):   465 (SMTPS), 587 (Submission), 25 (Inbound MTA)"
+    echo -e "  JMAP API:       http://${MAIL_HOSTNAME}:8080"
+    echo ""
+    echo -e "You can manage this server anytime by typing: ${BOLD}postarc help${NC}"
+}
+
+configure_env() {
+    echo ""
+    echo -e "${BOLD}${CYAN}=== Step 1: Mail Domain & Identity Setup ===${NC}"
+    while true; do
+        read -rp "Enter primary mail domain (e.g., example.com): " INPUT_DOMAIN
+        INPUT_DOMAIN=$(echo "${INPUT_DOMAIN}" | tr '[:upper:]' '[:lower:]' | tr -d ' ' | sed -e 's|^https*://||' -e 's|/.*$||')
+        if [ -n "${INPUT_DOMAIN}" ]; then
+            MAIL_DOMAIN="${INPUT_DOMAIN}"
+            break
+        fi
+        echo -e "${RED}Domain cannot be empty.${NC}"
+    done
+
+    DEFAULT_HOSTNAME="mail.${MAIL_DOMAIN}"
+    read -rp "Enter mail hostname [${DEFAULT_HOSTNAME}]: " INPUT_HOSTNAME
+    MAIL_HOSTNAME="${INPUT_HOSTNAME:-$DEFAULT_HOSTNAME}"
+
+    DEFAULT_ADMIN_EMAIL="admin@${MAIL_DOMAIN}"
+    read -rp "Enter admin email [${DEFAULT_ADMIN_EMAIL}]: " INPUT_ADMIN_EMAIL
+    ADMIN_EMAIL="${INPUT_ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}"
+
+    read -rp "Enter SSL/ACME notification email [${ADMIN_EMAIL}]: " INPUT_ACME_EMAIL
+    ACME_EMAIL="${INPUT_ACME_EMAIL:-$ADMIN_EMAIL}"
+
+    echo ""
+    echo -e "${BOLD}${CYAN}=== Step 2: Administrator Credentials ===${NC}"
+    read -rp "Enter admin password (press ENTER to auto-generate secure password): " INPUT_ADMIN_PASS
+    if [ -z "${INPUT_ADMIN_PASS}" ]; then
+        ADMIN_PASSWORD=$(openssl rand -base64 18 | tr -dc 'a-zA-Z0-9_' | head -c 16)
+        echo -e "${GREEN}Generated Admin Password: ${BOLD}${ADMIN_PASSWORD}${NC}"
+    else
+        ADMIN_PASSWORD="${INPUT_ADMIN_PASS}"
+    fi
+
+    echo ""
+    echo -e "${BOLD}${CYAN}=== Step 3: Storage Configuration ===${NC}"
+    echo "1) Local NVMe/SSD with transparent Zstandard compression (Fastest, zero cloud fees)"
+    echo "2) Cloudflare R2 / AWS S3 Object Storage"
+    read -rp "Select storage backend [1]: " STORAGE_CHOICE
+    STORAGE_CHOICE="${STORAGE_CHOICE:-1}"
+
+    if [ "${STORAGE_CHOICE}" = "2" ]; then
+        STORAGE_BACKEND="s3"
+        read -rp "Enter R2/S3 Bucket Name: " R2_BUCKET
+        read -rp "Enter R2 Endpoint (e.g. https://<id>.r2.cloudflarestorage.com): " R2_ENDPOINT
+        read -rp "Enter R2 Access Key ID: " R2_ACCESS_KEY_ID
+        read -rsp "Enter R2 Secret Access Key: " R2_SECRET_ACCESS_KEY
+        echo ""
+    else
+        STORAGE_BACKEND="fs"
+        R2_BUCKET="postarc-mail"
+        R2_ENDPOINT=""
+        R2_ACCESS_KEY_ID=""
+        R2_SECRET_ACCESS_KEY=""
+    fi
+
+    POSTGRES_DB="postarc"
+    POSTGRES_USER="postarc"
+    POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -dc 'a-zA-Z0-9' | head -c 20)
+    JWT_SECRET=$(openssl rand -hex 32)
+
+    cat <<EOF > .env
+# ==============================================================================
+# Postarc Production Environment Configuration
+# Generated on $(date -u +"%Y-%m-%d %H:%M:%S UTC")
+# ==============================================================================
+MAIL_DOMAIN=${MAIL_DOMAIN}
+MAIL_HOSTNAME=${MAIL_HOSTNAME}
+ACME_EMAIL=${ACME_EMAIL}
+
+ADMIN_EMAIL=${ADMIN_EMAIL}
+ADMIN_PASSWORD=${ADMIN_PASSWORD}
+
+POSTGRES_DB=${POSTGRES_DB}
+POSTGRES_USER=${POSTGRES_USER}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+JWT_SECRET=${JWT_SECRET}
+
+STORAGE_BACKEND=${STORAGE_BACKEND}
+R2_BUCKET=${R2_BUCKET}
+R2_ENDPOINT=${R2_ENDPOINT}
+R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+
+TLS_CERT_PATH=/etc/letsencrypt/live/${MAIL_HOSTNAME}/fullchain.pem
+TLS_KEY_PATH=/etc/letsencrypt/live/${MAIL_HOSTNAME}/privkey.pem
+EOF
+    chmod 600 .env
+    echo -e "${GREEN}Configuration written to .env${NC}"
+}
+
+manage_cert() {
+    local action="${1:-status}"
+    local host_name="${2:-${MAIL_HOSTNAME:-mail.localhost}}"
+
+    if [ -f .env ]; then
+        set -a
+        # shellcheck disable=SC1091
+        . ./.env
+        set +a
+        host_name="${MAIL_HOSTNAME:-$host_name}"
+    fi
+
+    case "${action}" in
+        request)
+            echo -e "${CYAN}Requesting Let's Encrypt certificate for '${host_name}'...${NC}"
+            if ! command -v certbot &> /dev/null; then
+                echo -e "${RED}Certbot is not installed. Run 'apt-get install -y certbot' first.${NC}"
+                exit 1
+            fi
+            certbot certonly --standalone -d "${host_name}"
+            echo -e "${GREEN}Certificate acquired! Updating Postarc container...${NC}"
+            ${COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d
+            echo -e "${GREEN}Certificate successfully attached to Postarc!${NC}"
+            ;;
+        renew)
+            echo -e "${CYAN}Renewing Let's Encrypt certificates...${NC}"
+            certbot renew
+            ${COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d
+            echo -e "${GREEN}Certificates renewed and reloaded.${NC}"
+            ;;
+        status)
+            local cert_file="/etc/letsencrypt/live/${host_name}/fullchain.pem"
+            if [ -f "${cert_file}" ]; then
+                echo -e "${GREEN}Active Let's Encrypt certificate for '${host_name}':${NC}"
+                openssl x509 -in "${cert_file}" -noout -issuer -dates -subject
+            else
+                echo -e "${YELLOW}No certificate found at ${cert_file}.${NC}"
+                echo "Request one with: postarc cert request ${host_name}"
+            fi
+            ;;
+        *)
+            echo "Usage: postarc cert [request|renew|status]"
+            ;;
+    esac
+}
+
+# ==============================================================================
+# CLI Entry Point & Subcommand Dispatcher
+# ==============================================================================
+
+CMD="${1:-}"
+
+if [ -z "${CMD}" ]; then
+    if [ ! -f .env ]; then
+        run_setup_wizard
+    else
+        print_usage
+    fi
+    exit 0
+fi
+
+shift || true
+
+case "${CMD}" in
+    setup)
+        run_setup_wizard
+        ;;
+    doctor)
+        run_container_cli doctor "$@"
+        ;;
+    user|domain|alias|dkim)
+        run_container_cli "${CMD}" "$@"
+        ;;
+    cert)
+        manage_cert "$@"
+        ;;
+    logs)
+        ensure_docker
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" logs -f postarc "$@"
+        ;;
+    status)
+        ensure_docker
+        echo -e "${BOLD}${CYAN}Postarc Container Status:${NC}"
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" ps
+        echo ""
+        echo -e "${BOLD}${CYAN}Active Listening Ports:${NC}"
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port postarc 25 2>/dev/null && echo "  - Port 25:   SMTP Inbound MTA" || true
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port postarc 143 2>/dev/null && echo "  - Port 143:  IMAP (STARTTLS)" || true
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port postarc 465 2>/dev/null && echo "  - Port 465:  SMTPS (Implicit TLS)" || true
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port postarc 587 2>/dev/null && echo "  - Port 587:  SMTP Submission" || true
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port postarc 993 2>/dev/null && echo "  - Port 993:  IMAPS (Implicit TLS)" || true
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port postarc 8080 2>/dev/null && echo "  - Port 8080: JMAP / HTTP API" || true
+        ;;
+    start)
+        ensure_docker
+        echo -e "${CYAN}Starting Postarc mailserver services...${NC}"
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d
+        echo -e "${GREEN}Postarc is running.${NC}"
+        ;;
+    stop)
+        ensure_docker
+        echo -e "${YELLOW}Stopping Postarc mailserver services...${NC}"
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" down
+        echo -e "${GREEN}Postarc stopped.${NC}"
+        ;;
+    restart)
+        ensure_docker
+        echo -e "${CYAN}Restarting Postarc mailserver services...${NC}"
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d --force-recreate
+        echo -e "${GREEN}Postarc restarted successfully.${NC}"
+        ;;
+    update)
+        ensure_docker
+        echo -e "${CYAN}Updating Postarc from Git...${NC}"
+        git pull origin main
+        echo -e "${CYAN}Rebuilding image with updated source...${NC}"
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" build
+        echo -e "${CYAN}Recreating containers with zero data loss...${NC}"
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d
+        install_host_symlink
+        echo -e "${GREEN}Postarc updated to latest release successfully!${NC}"
+        ;;
+    help|--help|-h)
+        print_usage
+        ;;
+    *)
+        echo -e "${RED}Unknown command: '${CMD}'${NC}"
+        echo "Run 'postarc help' for available commands."
+        exit 1
+        ;;
+esac
