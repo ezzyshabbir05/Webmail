@@ -277,8 +277,9 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
   const checkAuth = useCallback(async () => {
     try {
       if (typeof window !== "undefined") {
+        const token = localStorage.getItem("postarc_token")
         const stored = localStorage.getItem("postarc_user")
-        if (stored) {
+        if (token && stored) {
           const data = JSON.parse(stored)
           if (data.email) {
             const userEmail = data.email
@@ -287,14 +288,14 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
             setIdentities([
               {
                 id: accountId,
-                name: userEmail.split("@")[0] || "Admin",
+                name: data.username || userEmail.split("@")[0] || "Admin",
                 email: userEmail,
                 isDefault: true,
               },
             ])
             setActiveIdentity({
               id: accountId,
-              name: userEmail.split("@")[0] || "Admin",
+              name: data.username || userEmail.split("@")[0] || "Admin",
               email: userEmail,
               isDefault: true,
             })
@@ -409,7 +410,11 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
 
   const logout = async () => {
     if (typeof window !== "undefined") {
+      localStorage.removeItem("postarc_token")
       localStorage.removeItem("postarc_user")
+      localStorage.removeItem("postarc_emails")
+      localStorage.removeItem("postarc_mailboxes")
+      window.location.reload()
     }
     setIsAuthenticated(false)
     setEmails([])
