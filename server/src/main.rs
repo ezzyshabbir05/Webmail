@@ -1,9 +1,13 @@
 mod auth;
 mod config;
 mod db;
+mod event_bus;
+mod storage;
 
 use config::PostarcConfig;
 use db::MailRepository;
+use event_bus::EventBus;
+use std::sync::Arc;
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -31,6 +35,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("JMAP API Port: {}", config.jmap_bind_addr);
     info!("Storage Mode: {:?}", config.storage_backend);
 
+    // Initialize In-Process Event Bus
+    let event_bus = EventBus::new(2048);
+    info!("In-process event bus initialized (tokio::broadcast, 2048 slot ring).");
+
+    // Initialize Content-Addressed Blob Storage
+    let storage = storage::init_storage(&config).await;
+    info!("Blob storage subsystem ready.");
+
     // Initialize Database
     let repo = match db::init_pool(&config.database_url).await {
         Ok(pool) => {
@@ -46,6 +58,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(acc) => info!("Default admin mailbox ready: {}", acc.email),
                 Err(e) => error!("Failed to seed admin account: {}", e),
             }
+
+            // Spawn background soft-delete cleaner
+            storage::spawn_blob_gc_worker(repo.clone(), storage.clone());
+            info!("Background soft-delete garbage collection worker spawned.");
 
             Some(repo)
         }
