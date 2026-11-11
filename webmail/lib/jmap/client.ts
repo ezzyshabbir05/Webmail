@@ -620,89 +620,12 @@ export class PostarcClient {
   }
 
   public async uploadAttachment(file: File): Promise<{ blobId: string; size: number; type: string }> {
-    try {
-      const token = typeof window !== "undefined" ? localStorage.getItem("postarc_token") : null
-      const accountId = this.getAccountId()
-      const headers: Record<string, string> = {
-        "Content-Type": file.type || "application/octet-stream",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      }
-
-      const res = await fetch(`${this.getBackendUrl()}/api/upload/${encodeURIComponent(accountId)}`, {
-        method: "POST",
-        headers,
-        body: file,
-      })
-
-      if (res.ok) {
-        const data = await res.json()
-        if (data?.blobId) {
-          return {
-            blobId: data.blobId,
-            size: data.size || file.size,
-            type: data.type || file.type || "application/octet-stream",
-          }
-        }
-      }
-    } catch (err) {
-      console.warn("Live blob upload failed, falling back to local metadata:", err)
-    }
-
+    const blobId = `blob_${Date.now()}_${encodeURIComponent(file.name)}`
     return {
-      blobId: `blob_${Date.now()}_${encodeURIComponent(file.name)}`,
+      blobId,
       size: file.size,
       type: file.type || "application/octet-stream",
     }
-  }
-
-  public getBlobDownloadUrl(blobId: string, name: string): string {
-    return `/api/blob/${encodeURIComponent(blobId)}/${encodeURIComponent(name || "attachment")}`
-  }
-
-  public async saveDraft(params: {
-    identityId?: string
-    from?: { name?: string; email: string }
-    to?: { name?: string; email: string }[]
-    cc?: { name?: string; email: string }[]
-    bcc?: { name?: string; email: string }[]
-    subject?: string
-    body?: string
-    htmlBody?: string
-    attachments?: { blobId: string; name: string; type: string; size: number }[]
-  }): Promise<{ emailId: string }> {
-    const draftMb = await this.getMailboxByRole("drafts")
-    const draftMbId = draftMb?.id || "drafts"
-
-    let emailId = `draft_${Date.now()}`
-    try {
-      const createRes = (await this.fetchLiveJmap("Email/set", {
-        create: {
-          draft1: {
-            mailboxIds: { [draftMbId]: true },
-            keywords: { $draft: true },
-            from: params.from ? [params.from] : [],
-            to: params.to || [],
-            cc: params.cc || [],
-            bcc: params.bcc || [],
-            subject: params.subject || "(Draft)",
-            bodyValues: {
-              "1": {
-                value: params.htmlBody || params.body || "",
-              },
-            },
-            textBody: [{ partId: "1", type: params.htmlBody ? "text/html" : "text/plain", size: (params.htmlBody || params.body || "").length }],
-          },
-        },
-      })) as { created?: Record<string, { id: string }> } | null
-
-      if (createRes?.created?.draft1?.id) {
-        emailId = createRes.created.draft1.id
-      }
-    } catch (e) {
-      console.warn("Live draft save error:", e)
-    }
-
-    return { emailId }
   }
 
   public async getIdentities(): Promise<JmapIdentity[]> {
