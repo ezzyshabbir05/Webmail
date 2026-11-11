@@ -1,7 +1,7 @@
 use argon2::password_hash::rand_core::OsRng;
 use console::style;
 use dialoguer::{theme::ColorfulTheme, Input, Password, Select};
-use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
+use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey, LineEnding};
 use rsa::RsaPrivateKey;
 use crate::auth::argon::hash_password;
 use crate::db::MailRepository;
@@ -73,18 +73,54 @@ pub async fn run_setup_wizard() -> Result<(), Box<dyn std::error::Error>> {
         .default("postgres://postarc:secret@localhost:5432/postarc".to_string())
         .interact_text()?;
 
-    // 7. Generate 2048-bit RSA DKIM Key
-    println!("\nGenerating 2048-bit RSA DKIM Keypair...");
+    // 7. Generate or Preserve 2048-bit RSA DKIM Key
     let dkim_dir = Path::new("data/dkim");
     fs::create_dir_all(dkim_dir)?;
     let dkim_key_path = dkim_dir.join("mail.private");
 
-    let mut rng = OsRng;
-    let priv_key = RsaPrivateKey::new(&mut rng, 2048)?;
-    let private_pem = priv_key.to_pkcs8_pem(LineEnding::LF)?.to_string();
-    fs::write(&dkim_key_path, &private_pem)?;
-    let public_der = priv_key.to_public_key().to_public_key_der()?;
-    let public_b64 = base64_encode(public_der.as_bytes());
+    let (private_pem, public_b64) = if dkim_key_path.exists() {
+        if let Ok(existing_pem) = fs::read_to_string(&dkim_key_path) {
+            if let Ok(priv_key) = RsaPrivateKey::from_pkcs8_pem(&existing_pem) {
+                if let Ok(public_der) = priv_key.to_public_key().to_public_key_der() {
+                    let b64 = base64_encode(public_der.as_bytes());
+                    println!("\nFound existing DKIM keypair at {:?}. Preserving existing key.", dkim_key_path);
+                    (existing_pem, b64)
+                } else {
+                    println!("\nGenerating 2048-bit RSA DKIM Keypair...");
+                    let mut rng = OsRng;
+                    let priv_key = RsaPrivateKey::new(&mut rng, 2048)?;
+                    let pem = priv_key.to_pkcs8_pem(LineEnding::LF)?.to_string();
+                    fs::write(&dkim_key_path, &pem)?;
+                    let der = priv_key.to_public_key().to_public_key_der()?;
+                    (pem, base64_encode(der.as_bytes()))
+                }
+            } else {
+                println!("\nGenerating 2048-bit RSA DKIM Keypair...");
+                let mut rng = OsRng;
+                let priv_key = RsaPrivateKey::new(&mut rng, 2048)?;
+                let pem = priv_key.to_pkcs8_pem(LineEnding::LF)?.to_string();
+                fs::write(&dkim_key_path, &pem)?;
+                let der = priv_key.to_public_key().to_public_key_der()?;
+                (pem, base64_encode(der.as_bytes()))
+            }
+        } else {
+            println!("\nGenerating 2048-bit RSA DKIM Keypair...");
+            let mut rng = OsRng;
+            let priv_key = RsaPrivateKey::new(&mut rng, 2048)?;
+            let pem = priv_key.to_pkcs8_pem(LineEnding::LF)?.to_string();
+            fs::write(&dkim_key_path, &pem)?;
+            let der = priv_key.to_public_key().to_public_key_der()?;
+            (pem, base64_encode(der.as_bytes()))
+        }
+    } else {
+        println!("\nGenerating 2048-bit RSA DKIM Keypair...");
+        let mut rng = OsRng;
+        let priv_key = RsaPrivateKey::new(&mut rng, 2048)?;
+        let pem = priv_key.to_pkcs8_pem(LineEnding::LF)?.to_string();
+        fs::write(&dkim_key_path, &pem)?;
+        let der = priv_key.to_public_key().to_public_key_der()?;
+        (pem, base64_encode(der.as_bytes()))
+    };
 
     // 8. Generate .env file
     let mut env_content = format!(

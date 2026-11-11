@@ -120,13 +120,16 @@ pub enum AliasCommands {
 
 #[derive(Subcommand)]
 pub enum DkimCommands {
-    /// Generate a new 2048-bit RSA DKIM key for a domain
+    /// Generate a new 2048-bit RSA DKIM key for a domain (preserves existing key unless --force is used)
     Generate {
         /// Target domain
         domain: String,
         /// Selector name (default: mail)
         #[arg(short, long, default_value = "mail")]
         selector: String,
+        /// Force overwrite and regenerate key even if one already exists
+        #[arg(short, long)]
+        force: bool,
     },
     /// Export the exact DNS TXT record for Cloudflare, Route53, Namecheap, etc.
     Export {

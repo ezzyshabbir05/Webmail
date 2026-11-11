@@ -13,10 +13,33 @@ pub async fn handle_dkim_command(cmd: DkimCommands) -> Result<(), Box<dyn std::e
     let repo = MailRepository::connect(&config.database_url).await?;
 
     match cmd {
-        DkimCommands::Generate { domain, selector } => {
+        DkimCommands::Generate { domain, selector, force } => {
             let dom = repo.ensure_domain(&domain).await?;
 
-            println!("Generating 2048-bit RSA DKIM key for '{}.{}'...", selector, domain);
+            // If a DKIM key already exists and --force was not passed, preserve it!
+            if !force {
+                if let Ok(Some(existing_key)) = repo.get_dkim_key(&domain, &selector).await {
+                    if let Ok(priv_key) = RsaPrivateKey::from_pkcs8_pem(&existing_key.private_key_pem) {
+                        if let Ok(public_der) = priv_key.to_public_key().to_public_key_der() {
+                            let public_b64 = base64_encode(public_der.as_bytes());
+                            println!(
+                                "\n{} Existing DKIM key found for '{}.{}'. Preserving existing key.",
+                                style("[INFO]").cyan().bold(),
+                                selector,
+                                domain
+                            );
+                            println!("(To force generate a new key, run: postarc dkim generate {} --selector {} --force)\n", domain, selector);
+                            println!("DNS TXT Record for '{}' (Selector: '{}'):", domain, selector);
+                            println!("   Host / Name:  {}", style(format!("{}._domainkey.{}", selector, domain)).cyan().bold());
+                            println!("   Record Type:  TXT");
+                            println!("   Value:        {}\n", style(format!("v=DKIM1; k=rsa; p={}", public_b64)).green());
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+
+            println!("Generating new 2048-bit RSA DKIM key for '{}.{}'...", selector, domain);
             let mut rng = OsRng;
             let priv_key = RsaPrivateKey::new(&mut rng, 2048)?;
             let private_pem = priv_key.to_pkcs8_pem(LineEnding::LF)?.to_string();
