@@ -1043,6 +1043,8 @@ case "${CMD}" in
         ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port postarc 587 2>/dev/null && echo "  - Port 587:  SMTP Submission" || true
         ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port postarc 993 2>/dev/null && echo "  - Port 993:  IMAPS (Implicit TLS)" || true
         ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port postarc 8080 2>/dev/null && echo "  - Port 8080: JMAP / HTTP API" || true
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port webmail 3000 2>/dev/null && echo "  - Port 3000: Webmail UI" || true
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port postarc-webmail 3000 2>/dev/null && echo "  - Port 3000: Webmail UI" || true
         ;;
     start)
         ensure_docker
