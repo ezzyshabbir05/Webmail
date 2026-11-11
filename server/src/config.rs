@@ -30,9 +30,6 @@ pub struct PostarcConfig {
     pub tls_cert_path: Option<String>,
     pub tls_key_path: Option<String>,
     pub jwt_secret: String,
-
-    // External Services
-    pub rspamd_url: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -104,8 +101,6 @@ impl PostarcConfig {
         let tls_key_path = env::var("TLS_KEY_PATH").ok();
         let jwt_secret = env::var("JWT_SECRET").unwrap_or_else(|_| "postarc-secure-secret-key-32chars-min!!".to_string());
 
-        let rspamd_url = env::var("RSPAMD_URL").ok();
-
         Self {
             mail_domain,
             hostname,
@@ -127,7 +122,6 @@ impl PostarcConfig {
             tls_cert_path,
             tls_key_path,
             jwt_secret,
-            rspamd_url,
         }
     }
 }

@@ -48,67 +48,9 @@ import {
 } from "lucide-react"
 import type { SieveFilterRule } from "@/types/webmail"
 
-const INITIAL_RULES: SieveFilterRule[] = [
-  {
-    id: "rule_1",
-    name: "Auto-file Invoices & Receipts",
-    isEnabled: true,
-    conditionField: "subject",
-    conditionOperator: "contains",
-    conditionValue: "Invoice",
-    actionType: "move_to_folder",
-    actionTarget: "Receipts & Invoices",
-  },
-  {
-    id: "rule_2",
-    name: "Highlight Postarc Core Updates",
-    isEnabled: true,
-    conditionField: "from",
-    conditionOperator: "contains",
-    conditionValue: "@postarc.local",
-    actionType: "mark_flagged",
-  },
-  {
-    id: "rule_3",
-    name: "Discard Unwanted Marketing Promos",
-    isEnabled: false,
-    conditionField: "from",
-    conditionOperator: "contains",
-    conditionValue: "deals@",
-    actionType: "discard",
-  },
-]
+const INITIAL_RULES: SieveFilterRule[] = []
 
-const INITIAL_SPAM_RULES: SieveFilterRule[] = [
-  {
-    id: "spam_1",
-    name: "Rspamd High-Score Auto-Discard",
-    isEnabled: true,
-    conditionField: "subject",
-    conditionOperator: "contains",
-    conditionValue: "[SPAM-HIGH]",
-    actionType: "discard",
-  },
-  {
-    id: "spam_2",
-    name: "Quarantine Suspected Phishing & Spoofed Domains",
-    isEnabled: true,
-    conditionField: "from",
-    conditionOperator: "contains",
-    conditionValue: "security-update@",
-    actionType: "move_to_folder",
-    actionTarget: "Spam",
-  },
-  {
-    id: "spam_3",
-    name: "Flag Messages with Failed SPF/DKIM Alignment",
-    isEnabled: true,
-    conditionField: "body",
-    conditionOperator: "contains",
-    conditionValue: "dkim=fail",
-    actionType: "mark_flagged",
-  },
-]
+const INITIAL_SPAM_RULES: SieveFilterRule[] = []
 
 export default function FiltersPage() {
   const { activeIdentity, quotaInfo } = useMail()
@@ -388,7 +330,7 @@ export default function FiltersPage() {
               <Text type="body" color="secondary">
                 {activeFilterSet === "active"
                   ? "Incoming messages are evaluated sequentially by Postarc Mailserver according to these rules."
-                  : "Automated Rspamd score gates, DNSBL blacklists, and SPF/DKIM validation rules applied before mailbox delivery."}
+                  : "Automated spam score gates, DNSBL blacklists, and SPF/DMARC validation rules applied before mailbox delivery."}
               </Text>
             </Section>
             <Section

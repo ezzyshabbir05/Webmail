@@ -337,8 +337,8 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
 
   const [vacationSettings, setVacationSettings] = useState({
     isEnabled: false,
-    subject: "Out of Office Auto-reply",
-    body: "I am currently away with limited access to email. I will respond to your message upon my return.",
+    subject: "",
+    body: "",
   })
 
   const [composeInitialData, setComposeInitialData] = useState<{
@@ -353,9 +353,9 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
   const [allowedRemoteImages, setAllowedRemoteImages] = useState<Set<string>>(new Set())
 
   const [quotaInfo, setQuotaInfo] = useState<QuotaInfo>({
-    usedBytes: 1024 * 1024 * 250,
+    usedBytes: 0,
     totalBytes: 1024 * 1024 * 1024 * 10,
-    percent: 2.5,
+    percent: 0,
   })
 
   const toast = useToast()

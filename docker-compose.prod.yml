@@ -67,7 +67,6 @@ services:
       - R2_ENDPOINT=${R2_ENDPOINT}
       - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
       - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
-      - RSPAMD_URL=http://rspamd:11333
       - JWT_SECRET=${JWT_SECRET}
       - SMTP_BIND_ADDR=0.0.0.0:25
       - SMTPS_BIND_ADDR=0.0.0.0:465
@@ -85,8 +84,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      rspamd:
-        condition: service_started
 
   # ==============================================================================
   # PostgreSQL 17: Relational Metadata & Native GIN Full-Text Search
@@ -107,22 +104,8 @@ services:
       timeout: 5s
       retries: 5
 
-  # ==============================================================================
-  # Rspamd: High-Performance Bayes Spam & Antivirus Engine
-  # ==============================================================================
-  rspamd:
-    image: rspamd/rspamd:latest
-    container_name: postarc-rspamd
-    restart: unless-stopped
-    expose:
-      - "11333"
-    volumes:
-      - rspamd_data:/var/lib/rspamd
-      - ./data/dkim:/var/lib/rspamd/dkim:ro
-
 volumes:
   caddy_data:
   caddy_config:
   pgdata:
   blobstorage:
-  rspamd_data:

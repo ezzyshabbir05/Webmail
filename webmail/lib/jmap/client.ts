@@ -182,244 +182,7 @@ const INITIAL_MAILBOXES: JmapMailbox[] = [
   },
 ]
 
-const INITIAL_EMAILS: JmapEmail[] = [
-  {
-    id: "msg_elena_roadmap",
-    blobId: "blob_elena",
-    threadId: "msg_elena_roadmap",
-    mailboxIds: { inbox: true },
-    keywords: { $flagged: true },
-    size: 24576,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-    from: [{ name: "Elena Rostova", email: "elena.rostova@agilique.com" }],
-    to: [{ name: "Postarc Team", email: "team@agilique.com" }],
-    subject: "Q4 Engineering Roadmap & Postarc Architecture Milestone",
-    preview: "Hey team, I've reviewed the latest architecture specs and the Astryx UI implementation. Everything looks solid...",
-    bodyValues: {
-      body1: {
-        value: `Hi team,
-
-I wanted to share our Q4 engineering roadmap update. The transition to the standalone Astryx design system and our high-performance frontend architecture is progressing ahead of schedule.
-
-Key Milestones:
-1. Pure Frontend Webmail Client: Fully decoupled, zero external server bottlenecks.
-2. Astryx Design System Adherence: Token-backed layouts, dark/light theme persistence, responsive multi-pane layout.
-3. Interactive Performance: Sub-millisecond state updates, thread conversation view, and zero layout shift.
-
-Please review the attached PDF roadmap document and let me know your thoughts before our sync tomorrow at 10 AM.
-
-Best regards,
-Elena Rostova
-VP of Engineering | Agilique`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-    attachments: [
-      {
-        partId: "att_1",
-        blobId: "blob_pdf_roadmap",
-        size: 1468006,
-        name: "Q4_Engineering_Roadmap.pdf",
-        type: "application/pdf",
-      },
-    ],
-  },
-  {
-    id: "msg_sarah_design",
-    blobId: "blob_sarah",
-    threadId: "msg_sarah_design",
-    mailboxIds: { inbox: true },
-    keywords: {},
-    size: 32768,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 42).toISOString(),
-    from: [{ name: "Sarah Chen", email: "sarah.chen@agilique.com" }],
-    to: [{ name: "Postarc Team", email: "team@agilique.com" }],
-    subject: "Updated Astryx Design Tokens & Webmail Component Specs",
-    preview: "Hi everyone, I've exported the latest design token definitions for our light/dark palettes and attachment chips...",
-    bodyValues: {
-      body1: {
-        value: `Hi everyone,
-
-I've exported the latest design token definitions for our light/dark palettes and attachment chips. The updated token file is attached for direct import.
-
-Please verify the colors and typography scale in the design system.
-
-Cheers,
-Sarah Chen
-Product Design Lead`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-    attachments: [
-      {
-        partId: "att_tokens",
-        blobId: "blob_tokens_json",
-        size: 148480,
-        name: "Astryx_Design_Tokens_v2.4.json",
-        type: "application/json",
-      },
-    ],
-  },
-  {
-    id: "msg_astryx_welcome",
-    blobId: "blob_astryx",
-    threadId: "msg_astryx_welcome",
-    mailboxIds: { inbox: true },
-    keywords: {},
-    size: 18432,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
-    from: [{ name: "Astryx Design System", email: "hello@astryxdesign.org" }],
-    to: [{ name: "Postarc User", email: "admin@agilique.com" }],
-    subject: "Welcome to Astryx Component Library & Postarc UI System",
-    preview: "Welcome to your new modern webmail experience built with 100% token-backed components and responsive layouts...",
-    bodyValues: {
-      body1: {
-        value: `Welcome to Postarc Webmail!
-
-This client is built with Astryx Design System — crafted for high density, accessible, and themeable web applications.
-
-Design Principles:
-- Layout & Spacing: Structured using VStack, HStack, AppShell, and Toolbar components.
-- Data Presentation: High-density rows with Token counts and structured metadata.
-- Theme System: Seamless dark and light modes driven by CSS variables and semantic design tokens.
-
-Feel free to customize your folders, filter your threads, and explore the keyboard shortcuts!
-
-Happy emailing!
-The Astryx Team`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-  },
-  {
-    id: "msg_github_security",
-    blobId: "blob_github",
-    threadId: "msg_github_security",
-    mailboxIds: { inbox: true },
-    keywords: {},
-    size: 12288,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 300).toISOString(),
-    from: [{ name: "GitHub Security", email: "security@github.com" }],
-    to: [{ name: "Admin", email: "admin@agilique.com" }],
-    subject: "[Security Alert] Token permissions updated for @agilique/postarc-webmail",
-    preview: "A personal access token was successfully rotated and scoped for repository access. No further action is required...",
-    bodyValues: {
-      body1: {
-        value: `Security Notification
-
-A personal access token (fine-grained) associated with your organization was rotated at ${new Date().toLocaleDateString()}.
-
-Repository: agilique/postarc-webmail
-Permissions: Contents (Read & Write), Actions (Read)
-IP Address: 187.127.171.46
-
-If you authorized this change, you do not need to take any action. If this was not you, please visit your security settings immediately.
-
-GitHub Security Operations`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-  },
-  {
-    id: "msg_archive_invoice",
-    blobId: "blob_invoice",
-    threadId: "msg_archive_invoice",
-    mailboxIds: { archive: true, inbox: true },
-    keywords: { $seen: true, $flagged: true },
-    size: 92160,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 1440).toISOString(),
-    from: [{ name: "Stripe Billing", email: "invoices@stripe.com" }],
-    to: [{ name: "Accounts Payable", email: "admin@agilique.com" }],
-    subject: "Receipt for your subscription payment #INV-88291",
-    preview: "Your subscription payment was successfully processed. Thank you for using our services...",
-    bodyValues: {
-      body1: {
-        value: `Receipt from Stripe
-
-Invoice: #INV-88291
-Date: November 1, 2026
-Amount: $120.00 USD
-Status: Paid
-
-Please find the detailed invoice PDF attached for your records.`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-    attachments: [
-      {
-        partId: "att_inv",
-        blobId: "blob_pdf_inv",
-        size: 84920,
-        name: "Invoice_INV-88291.pdf",
-        type: "application/pdf",
-      },
-    ],
-  },
-  {
-    id: "msg_sent_proposal",
-    blobId: "blob_sent_1",
-    threadId: "msg_sent_proposal",
-    mailboxIds: { sent: true },
-    keywords: { $seen: true },
-    size: 12288,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 2880).toISOString(),
-    from: [{ name: "Admin", email: "admin@agilique.com" }],
-    to: [{ name: "Elena Rostova", email: "elena.rostova@agilique.com" }],
-    subject: "Re: Q4 Engineering Roadmap & Postarc Architecture Milestone",
-    preview: "Thanks Elena! The frontend is now fully standalone and using Astryx components cleanly...",
-    bodyValues: {
-      body1: {
-        value: `Hi Elena,
-
-Thanks for sharing the roadmap. I've reviewed the architecture milestones and verified that the frontend is now 100% decoupled and running smoothly.
-
-Looking forward to the sync tomorrow.
-
-Best,
-Admin`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-  },
-  {
-    id: "msg_draft_release_notes",
-    blobId: "blob_draft_1",
-    threadId: "msg_draft_release_notes",
-    mailboxIds: { drafts: true },
-    keywords: { $seen: true },
-    size: 8192,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 720).toISOString(),
-    from: [{ name: "Admin", email: "admin@agilique.com" }],
-    to: [{ name: "Engineering All", email: "team@agilique.com" }],
-    subject: "Draft: Release Notes for Postarc Webmail v1.0",
-    preview: "We are excited to announce the initial release of Postarc Webmail featuring pure Astryx UI, dark mode...",
-    bodyValues: {
-      body1: {
-        value: `Postarc Webmail v1.0 Release Notes
-
-Highlights:
-- Pure Frontend Architecture built with Next.js and Astryx Design System
-- Full JMAP RFC 8620 / 8621 compatibility
-- Real-time client state management and dark mode theme switching`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-  },
-]
+const INITIAL_EMAILS: JmapEmail[] = []
 
 const INITIAL_IDENTITIES: JmapIdentity[] = []
 const INITIAL_CONTACTS: JmapContactCard[] = []
@@ -436,14 +199,14 @@ export class PostarcClient {
   private vacation: JmapVacationResponse = {
     id: "singleton",
     isEnabled: false,
-    subject: "Out of Office Auto-reply",
-    textBody: "I am currently away with limited access to email. I will respond to your message upon my return.",
+    subject: "",
+    textBody: "",
   }
   private quota: JmapQuota = {
     id: "quota_1",
     name: "Mailbox Storage",
     resourceType: "octets",
-    used: 2576980377,
+    used: 0,
     limit: 10737418240,
     scope: "account",
   }
@@ -465,21 +228,12 @@ export class PostarcClient {
       const storedEmails = localStorage.getItem("postarc_emails")
       if (storedEmails) {
         const parsed = JSON.parse(storedEmails)
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const hasAttachment = parsed.some((e: JmapEmail) => e.attachments && e.attachments.length > 0)
-          if (hasAttachment) {
-            this.emails = parsed
-          } else {
-            // Restore attachment-bearing sample emails that were wiped out
-            const storedIds = new Set(parsed.map((e: JmapEmail) => e.id))
-            const sampleAttachments = INITIAL_EMAILS.filter((e) => e.attachments && e.attachments.length > 0)
-            this.emails = [...parsed, ...sampleAttachments.filter((e) => !storedIds.has(e.id))]
-          }
-        } else {
-          this.emails = INITIAL_EMAILS
+        if (Array.isArray(parsed)) {
+          // Filter out any lingering sample/mock IDs from old sessions
+          this.emails = parsed.filter((e: JmapEmail) => !e.id.startsWith("msg_"))
         }
       } else {
-        this.emails = INITIAL_EMAILS
+        this.emails = []
       }
       const storedVacation = localStorage.getItem("postarc_vacation")
       if (storedVacation) {
@@ -710,16 +464,17 @@ export class PostarcClient {
           })) as {
             list?: JmapEmail[]
           } | null
-          if (liveGet?.list && liveGet.list.length > 0) {
-            const serverIds = new Set(liveGet.list.map((e) => e.id))
-            const remaining = this.emails.filter((e) => !serverIds.has(e.id))
-            this.emails = [...liveGet.list, ...remaining].sort((a, b) => {
+          if (liveGet?.list) {
+            this.emails = liveGet.list.sort((a, b) => {
               const timeA = new Date(a.receivedAt || a.sentAt || 0).getTime()
               const timeB = new Date(b.receivedAt || b.sentAt || 0).getTime()
               return timeB - timeA
             })
             this.saveToStorage()
           }
+        } else if (Array.isArray(liveQuery.ids) && liveQuery.ids.length === 0) {
+          this.emails = []
+          this.saveToStorage()
         }
       }
     } catch {

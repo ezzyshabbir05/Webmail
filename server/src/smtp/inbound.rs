@@ -5,41 +5,11 @@ use mail_parser::MessageParser;
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::info;
 use uuid::Uuid;
 
-async fn check_rspamd(url: &str, from: &str, rcpt: &str, payload: &[u8]) -> Option<(String, f64)> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .ok()?;
-
-    let endpoint = format!("{}/checkv2", url.trim_end_matches('/'));
-    let res = client
-        .post(&endpoint)
-        .header("From", from)
-        .header("Rcpt", rcpt)
-        .body(payload.to_vec())
-        .send()
-        .await
-        .ok()?;
-
-    if res.status().is_success() {
-        if let Ok(json) = res.json::<serde_json::Value>().await {
-            let action = json
-                .get("action")
-                .and_then(|v| v.as_str())
-                .unwrap_or("no action")
-                .to_string();
-            let score = json.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            return Some((action, score));
-        }
-    }
-    None
-}
-
 /// Production Inbound Delivery Engine:
-/// Resolves virtual aliases, executes anti-spam scoring, applies authentication results,
+/// Resolves virtual aliases, executes native anti-spam scoring, applies authentication results,
 /// maintains JWZ conversation threading, and triggers vacation autoresponders.
 pub async fn process_inbound_mail(
     repo: &MailRepository,
@@ -139,21 +109,8 @@ pub async fn process_inbound_mail(
     let spam_detector = crate::security::SpamDetector::new();
     let spam_report = spam_detector.evaluate(client_ip, sender_envelope, &from_addr).await;
 
-    let mut is_spam = spam_report.is_spam;
-    let mut total_score = spam_report.score;
-
-    // Optional Rspamd integration if configured
-    let rspamd_url = std::env::var("RSPAMD_URL").unwrap_or_else(|_| "http://rspamd:11333".to_string());
-    if let Some((action, score)) = check_rspamd(&rspamd_url, &from_addr, &clean_rcpt, payload).await {
-        total_score += score;
-        if action == "reject" {
-            warn!("Inbound email from {} rejected by spam policy (score: {:.1})", from_addr, score);
-            return Err(format!("550 5.7.1 Message rejected by spam policy (score: {:.1})", score));
-        } else if action == "add header" || action == "rewrite subject" || score >= 6.0 {
-            info!("Inbound email from {} marked as spam by rspamd (action: {}, score: {:.1})", from_addr, action, score);
-            is_spam = true;
-        }
-    }
+    let is_spam = spam_report.is_spam;
+    let total_score = spam_report.score;
 
     // 4. Determine final destination mailbox (Inbox vs Spam)
     let final_mailbox_id = if is_spam {
