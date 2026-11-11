@@ -1,7 +1,7 @@
 use crate::db::{EnrichedMessage, FlagUpdates, MailRepository, NewIncomingMessage};
 use crate::event_bus::{EventBus, MailboxEvent, MailboxEventType};
 use crate::storage::BlobStorage;
-use mail_parser::MessageParser;
+use mail_parser::{MessageParser, MimeHeaders};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -70,8 +70,52 @@ pub async fn handle_email_get(
             keywords.insert(kw, json!(true));
         }
 
+        let mut attachments = Vec::new();
+        let mut email_headers = Vec::new();
+
         let (body_val, is_html) = if let Ok(blob_bytes) = storage.get_blob(&msg.blob_id).await {
             if let Some(parsed) = MessageParser::default().parse(&blob_bytes) {
+                // Extract security & spam headers
+                for header_name in ["Authentication-Results", "X-Spam-Status", "X-Spam-Flag", "X-Spam-Score"] {
+                    if let Some(val) = parsed.header(header_name) {
+                        match val {
+                            mail_parser::HeaderValue::Text(t) => {
+                                email_headers.push(json!({ "name": header_name, "value": t }));
+                            }
+                            mail_parser::HeaderValue::TextList(l) => {
+                                for t in l {
+                                    email_headers.push(json!({ "name": header_name, "value": t }));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                // Extract attachments
+                for (idx, att) in parsed.attachments().enumerate() {
+                    let att_name = att.attachment_name().unwrap_or("attachment").to_string();
+                    let content_type = att.content_type().map(|c| {
+                        let sub = c.c_subtype.as_deref().unwrap_or("octet-stream");
+                        format!("{}/{}", c.c_type, sub)
+                    }).unwrap_or_else(|| "application/octet-stream".to_string());
+                    let part_id = format!("att_{}_{}", msg.id, idx);
+
+                    let att_bytes = att.contents();
+                    let mut a_hasher = Sha256::new();
+                    a_hasher.update(att_bytes);
+                    let a_blob_id = hex::encode(a_hasher.finalize());
+                    let _ = storage.put_blob(&a_blob_id, att_bytes).await;
+
+                    attachments.push(json!({
+                        "partId": part_id,
+                        "blobId": a_blob_id,
+                        "size": att_bytes.len(),
+                        "name": att_name,
+                        "type": content_type
+                    }));
+                }
+
                 if let Some(html) = parsed.body_html(0) {
                     (html.to_string(), true)
                 } else if let Some(text) = parsed.body_text(0) {
@@ -98,7 +142,9 @@ pub async fn handle_email_get(
             "from": [{ "name": msg.from_name, "email": msg.from_address }],
             "to": [{ "name": "", "email": msg.to_addresses }],
             "preview": msg.snippet,
-            "hasAttachment": msg.has_attachments,
+            "hasAttachment": msg.has_attachments || !attachments.is_empty(),
+            "attachments": attachments,
+            "headers": email_headers,
             "bodyValues": {
                 "1": {
                     "value": body_val,
@@ -132,8 +178,12 @@ pub async fn handle_email_query(
     let in_mailbox = if let Some(s) = filter.and_then(|f| f.get("inMailbox")).and_then(|v| v.as_str()) {
         if let Ok(u) = Uuid::parse_str(s) {
             Some(u)
+        } else if let Ok(Some(mb)) = repo.get_mailbox_by_role(account_id, s).await {
+            Some(mb.id)
+        } else if let Ok(mbs) = repo.list_mailboxes(account_id).await {
+            mbs.into_iter().find(|m| m.name.eq_ignore_ascii_case(s)).map(|m| m.id)
         } else {
-            repo.get_mailbox_by_role(account_id, s).await.ok().flatten().map(|m| m.id)
+            None
         }
     } else {
         None
@@ -347,29 +397,60 @@ pub async fn handle_email_set(
                         if let Some(flagged) = keywords.get("$flagged").and_then(|v| v.as_bool()) {
                             flags.is_flagged = Some(flagged);
                         }
+                        if let Some(draft) = keywords.get("$draft").and_then(|v| v.as_bool()) {
+                            flags.is_draft = Some(draft);
+                        }
+                        if let Some(answered) = keywords.get("$answered").and_then(|v| v.as_bool()) {
+                            flags.is_answered = Some(answered);
+                        }
                     }
 
-                    // Handle move to different mailbox
+                    let mut active_mb_id = current_mb_id;
+                    let mut active_uid = current_uid;
+
+                    // Handle move to different mailbox (support UUID, role name like "archive"/"trash"/"spam", or custom mailbox name)
                     if let Some(mb_ids) = patch.get("mailboxIds").and_then(|m| m.as_object()) {
                         if let Some(new_mb_id_str) = mb_ids.keys().next() {
-                            if let Ok(new_mb_id) = Uuid::parse_str(new_mb_id_str) {
+                            let target_mb_id = if let Ok(u) = Uuid::parse_str(new_mb_id_str) {
+                                Some(u)
+                            } else if let Ok(Some(mb)) = repo.get_mailbox_by_role(account_id, new_mb_id_str).await {
+                                Some(mb.id)
+                            } else if let Ok(mailboxes) = repo.list_mailboxes(account_id).await {
+                                mailboxes.into_iter().find(|m| m.name.eq_ignore_ascii_case(new_mb_id_str)).map(|m| m.id)
+                            } else {
+                                None
+                            };
+
+                            if let Some(new_mb_id) = target_mb_id {
                                 if new_mb_id != current_mb_id {
-                                    let _ = repo.copy_or_move_message(current_mb_id, new_mb_id, current_uid, true).await;
+                                    if let Ok(Some((_src_uid, dest_uid))) = repo.copy_or_move_message(current_mb_id, new_mb_id, current_uid, true).await {
+                                        active_mb_id = new_mb_id;
+                                        active_uid = dest_uid;
+                                        event_bus.publish(MailboxEvent {
+                                            account_id,
+                                            mailbox_id: new_mb_id,
+                                            event_type: MailboxEventType::Created,
+                                            uid: dest_uid,
+                                            modseq: 1,
+                                        });
+                                    }
                                 }
                             }
                         }
                     }
 
-                    if let Ok(Some(updated_junc)) = repo.update_message_flags(current_mb_id, current_uid, flags).await {
-                        event_bus.publish(MailboxEvent {
-                            account_id,
-                            mailbox_id: current_mb_id,
-                            event_type: MailboxEventType::Updated,
-                            uid: updated_junc.uid,
-                            modseq: updated_junc.modseq,
-                        });
-                        updated.insert(id_str.clone(), json!({}));
+                    if flags.is_unread.is_some() || flags.is_flagged.is_some() || flags.is_draft.is_some() || flags.is_answered.is_some() || flags.is_deleted.is_some() {
+                        if let Ok(Some(updated_junc)) = repo.update_message_flags(active_mb_id, active_uid, flags).await {
+                            event_bus.publish(MailboxEvent {
+                                account_id,
+                                mailbox_id: active_mb_id,
+                                event_type: MailboxEventType::Updated,
+                                uid: updated_junc.uid,
+                                modseq: updated_junc.modseq,
+                            });
+                        }
                     }
+                    updated.insert(id_str.clone(), json!({}));
                 }
             }
         }

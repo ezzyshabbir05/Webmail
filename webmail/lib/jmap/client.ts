@@ -686,12 +686,32 @@ export class PostarcClient {
 
   public async getVacationResponse(): Promise<JmapVacationResponse | null> {
     this.loadFromStorage()
+    try {
+      const live = (await this.fetchLiveJmap("VacationResponse/get", {})) as {
+        list?: JmapVacationResponse[]
+      } | null
+      if (live?.list && live.list.length > 0) {
+        this.vacation = live.list[0]
+        this.saveToStorage()
+      }
+    } catch {
+      // offline fallback
+    }
     return { ...this.vacation }
   }
 
   public async setVacationResponse(updates: Partial<JmapVacationResponse>): Promise<void> {
     this.vacation = { ...this.vacation, ...updates }
     this.saveToStorage()
+    try {
+      await this.fetchLiveJmap("VacationResponse/set", {
+        update: {
+          singleton: updates,
+        },
+      })
+    } catch {
+      // offline fallback
+    }
   }
 
   public async getQuota(): Promise<JmapQuota | null> {

@@ -13,16 +13,40 @@ pub async fn handle_identity_get(
         .map_err(|e| format!("Database error: {}", e))?
         .ok_or_else(|| "Account not found".to_string())?;
 
-    let list = vec![json!({
+    let primary_name = if !account.display_name.is_empty() {
+        account.display_name.clone()
+    } else {
+        account.username.clone()
+    };
+
+    let mut list = vec![json!({
         "id": account.id.to_string(),
-        "name": account.username,
+        "name": primary_name,
         "email": account.email,
-        "replyTo": [{ "name": account.username, "email": account.email }],
+        "replyTo": [{ "name": primary_name, "email": account.email }],
         "bcc": [],
         "textSignature": "-- \nSent via Postarc Webmail",
         "htmlSignature": "<div>-- <br>Sent via Postarc Webmail</div>",
         "mayDelete": false
     })];
+
+    // Also include any aliases for this account as selectable sending identities
+    if let Ok(aliases) = repo.list_aliases_for_account(account_id).await {
+        for al in aliases {
+            if !al.source_address.starts_with('@') && al.source_address != account.email {
+                list.push(json!({
+                    "id": al.id.to_string(),
+                    "name": primary_name,
+                    "email": al.source_address,
+                    "replyTo": [{ "name": primary_name, "email": al.source_address }],
+                    "bcc": [],
+                    "textSignature": "-- \nSent via Postarc Webmail",
+                    "htmlSignature": "<div>-- <br>Sent via Postarc Webmail</div>",
+                    "mayDelete": false
+                }));
+            }
+        }
+    }
 
     Ok(json!({
         "accountId": account_id.to_string(),

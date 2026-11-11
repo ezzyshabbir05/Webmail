@@ -59,6 +59,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/jmap", post(post_jmap))
         .route("/api/events", get(get_events))
         .route("/api/blob/{account_id}/{blob_id}/{name}", get(get_blob))
+        .route("/api/blob/{blob_id}/{name}", get(get_blob_two_segment))
         .route("/api/upload/{account_id}", post(post_upload))
         .layer(cors)
         .with_state(state)
@@ -179,6 +180,8 @@ async fn post_jmap(
             "CalendarEvent/set" => handle_calendar_event_set(&state.repo, account_id, args).await,
             "ContactCard/get" => handle_contact_card_get(&state.repo, account_id, args).await,
             "ContactCard/set" => handle_contact_card_set(&state.repo, account_id, args).await,
+            "VacationResponse/get" => handle_vacation_response_get(&state.repo, account_id, args).await,
+            "VacationResponse/set" => handle_vacation_response_set(&state.repo, account_id, args).await,
             "Quota/get" => handle_quota_get(&state.repo, account_id, args).await,
             _ => {
                 method_responses.push((
@@ -241,6 +244,24 @@ async fn get_events(
 async fn get_blob(
     State(state): State<AppState>,
     Path((_account_id, blob_id, name)): Path<(String, String, String)>,
+) -> Response {
+    match state.storage.get_blob(&blob_id).await {
+        Ok(bytes) => {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{}\"", name).parse().unwrap(),
+            );
+            headers.insert(header::CONTENT_TYPE, "application/octet-stream".parse().unwrap());
+            (StatusCode::OK, headers, bytes).into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "Blob not found").into_response(),
+    }
+}
+
+async fn get_blob_two_segment(
+    State(state): State<AppState>,
+    Path((blob_id, name)): Path<(String, String)>,
 ) -> Response {
     match state.storage.get_blob(&blob_id).await {
         Ok(bytes) => {

@@ -98,6 +98,12 @@ export default function MailboxSettingsPage() {
   const [vacationSubject, setVacationSubject] = useState(vacationSettings.subject)
   const [vacationBody, setVacationBody] = useState(vacationSettings.body)
 
+  React.useEffect(() => {
+    setIsVacationEnabled(vacationSettings.isEnabled)
+    setVacationSubject(vacationSettings.subject)
+    setVacationBody(vacationSettings.body)
+  }, [vacationSettings])
+
   // Add Identity Dialog
   const [isAddIdentityOpen, setIsAddIdentityOpen] = useState(false)
   const [newIdentName, setNewIdentName] = useState("")

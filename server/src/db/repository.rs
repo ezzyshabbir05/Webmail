@@ -350,6 +350,18 @@ impl MailRepository {
         Ok(None)
     }
 
+    pub async fn list_aliases_for_account(
+        &self,
+        account_id: Uuid,
+    ) -> Result<Vec<crate::db::Alias>, sqlx::Error> {
+        sqlx::query_as::<_, crate::db::Alias>(
+            "SELECT * FROM aliases WHERE target_account_id = $1 ORDER BY source_address ASC",
+        )
+        .bind(account_id)
+        .fetch_all(&self.pool)
+        .await
+    }
+
     // =========================================================================
     // Mailbox Operations
     // =========================================================================

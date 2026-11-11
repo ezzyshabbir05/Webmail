@@ -5,6 +5,7 @@ pub mod identity;
 pub mod mailbox;
 pub mod quota;
 pub mod submit;
+pub mod vacation;
 
 pub use calendar::*;
 pub use contact::*;
@@ -13,3 +14,4 @@ pub use identity::*;
 pub use mailbox::*;
 pub use quota::*;
 pub use submit::*;
+pub use vacation::*;

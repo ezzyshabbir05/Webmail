@@ -14,12 +14,18 @@
         Referrer-Policy "strict-origin-when-cross-origin"
     }
 
-    # Route JMAP discovery and API calls to Postarc Mailserver backend
-    @jmap {
+    # Route JMAP discovery, client autoconfig, and API calls to Postarc Mailserver backend
+    @mailserver {
         path /.well-known/jmap*
+        path /.well-known/autoconfig*
+        path /autodiscover*
+        path /Autodiscover*
+        path /mail/config-v1.1.xml
+        path /.well-known/mta-sts.txt
+        path /healthz
         path /api/*
     }
-    handle @jmap {
+    handle @mailserver {
         reverse_proxy postarc-server:8080 {
             header_up X-Real-IP {remote_host}
             header_up X-Forwarded-For {remote_host}

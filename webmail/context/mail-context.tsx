@@ -156,6 +156,41 @@ function mapJmapEmailToThread(
     } else if (role === "archive") {
       folder = "archive"
       break
+    } else if (role === "inbox") {
+      folder = "inbox"
+      break
+    } else if (mbId) {
+      folder = mbId
+    }
+  }
+
+  // Extract real security & spam results from mailserver RFC headers
+  let spfStatus: "pass" | "fail" | "neutral" = "pass"
+  let dkimStatus: "pass" | "fail" = "pass"
+  let dmarcStatus: "pass" | "fail" = "pass"
+
+  if (Array.isArray(email.headers)) {
+    for (const h of email.headers) {
+      const lowerName = h.name.toLowerCase()
+      const lowerVal = h.value.toLowerCase()
+
+      if (lowerName === "authentication-results") {
+        if (lowerVal.includes("spf=fail")) spfStatus = "fail"
+        else if (lowerVal.includes("spf=softfail") || lowerVal.includes("spf=neutral")) spfStatus = "neutral"
+
+        if (lowerVal.includes("dkim=fail")) dkimStatus = "fail"
+
+        if (
+          lowerVal.includes("dmarc=reject") ||
+          lowerVal.includes("dmarc=quarantine") ||
+          lowerVal.includes("dmarc=fail")
+        ) {
+          dmarcStatus = "fail"
+        }
+      } else if (lowerName === "x-spam-status" && lowerVal.startsWith("yes")) {
+        spfStatus = "fail"
+        dmarcStatus = "fail"
+      }
     }
   }
 
@@ -163,11 +198,11 @@ function mapJmapEmailToThread(
   const htmlBodyVal = Object.values(email.bodyValues || {}).find((b) => b.value.includes("<"))?.value
 
   const attachments: EmailAttachment[] = (email.attachments || []).map((att) => ({
-    id: att.partId || att.blobId || Math.random().toString(),
+    id: att.blobId || att.partId || Math.random().toString(),
     name: att.name || "attachment",
     size: `${Math.round((att.size || 0) / 1024)} KB`,
     type: att.type?.includes("image") ? "image" : att.type?.includes("pdf") ? "pdf" : "document",
-    downloadUrl: `/api/blob/raw/${encodeURIComponent(att.blobId || att.partId || "")}/${encodeURIComponent(att.name || "attachment")}`,
+    downloadUrl: `/api/blob/${encodeURIComponent(att.blobId || "")}/${encodeURIComponent(att.name || "attachment")}`,
   }))
 
   return {
@@ -200,9 +235,9 @@ function mapJmapEmailToThread(
         fullDate,
         isoDate: email.receivedAt,
         attachments: attachments.length > 0 ? attachments : undefined,
-        spfStatus: "pass",
-        dkimStatus: "pass",
-        dmarcStatus: "pass",
+        spfStatus,
+        dkimStatus,
+        dmarcStatus,
       },
     ],
   }
@@ -594,16 +629,35 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
 
     const snapshot = [...emails]
     setPreviousSnapshot(snapshot)
-    setEmails((prev) =>
-      prev
-        .map((e) => {
-          if (targets.includes(e.id)) {
-            return { ...e, folder: e.folder === "trash" ? "deleted" : "trash" }
-          }
-          return e
-        })
-        .filter((e) => e.folder !== "deleted")
-    )
+
+    const isAlreadyInTrash = activeFolder === "trash"
+
+    if (isAlreadyInTrash) {
+      setEmails((prev) => prev.filter((e) => !targets.includes(e.id)))
+      postarcClient.destroyEmails(targets).catch(() => {})
+      toast({
+        body: `Permanently deleted ${targets.length} conversation${targets.length > 1 ? "s" : ""}`,
+      })
+    } else {
+      setEmails((prev) =>
+        prev.map((e) => (targets.includes(e.id) ? { ...e, folder: "trash" } : e))
+      )
+      targets.forEach((id) => {
+        postarcClient.setEmailProperties(id, { mailboxIds: { trash: true } }).catch(() => {})
+      })
+      toast({
+        body: `Moved ${targets.length} to Trash`,
+        endContent: (
+          <Button
+            label="Undo"
+            variant="ghost"
+            size="sm"
+            onClick={() => setEmails(snapshot)}
+          />
+        ),
+      })
+    }
+
     setSelectedIds((prev) => {
       const next = new Set(prev)
       targets.forEach((id) => next.delete(id))
@@ -612,21 +666,6 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     if (activeEmailId && targets.includes(activeEmailId)) {
       setActiveEmailId(null)
     }
-
-    // Live JMAP delete
-    postarcClient.destroyEmails(targets).catch(() => {})
-
-    toast({
-      body: `Moved ${targets.length} to Trash`,
-      endContent: (
-        <Button
-          label="Undo"
-          variant="ghost"
-          size="sm"
-          onClick={() => setEmails(snapshot)}
-        />
-      ),
-    })
   }
 
   const reportSpam = (overrideIds?: string[]) => {
@@ -968,7 +1007,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     toast({ body: "Draft saved" })
   }
 
-  const createCustomFolder = (name: string) => {
+  const createCustomFolder = (name: string, _color?: string) => {
     postarcClient
       .setMailbox({
         create: {
