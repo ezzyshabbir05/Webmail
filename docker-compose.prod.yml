@@ -75,8 +75,8 @@ services:
       - IMAP_BIND_ADDR=0.0.0.0:143
       - IMAPS_BIND_ADDR=0.0.0.0:993
       - JMAP_BIND_ADDR=0.0.0.0:8080
-      - TLS_CERT_PATH=${TLS_CERT_PATH:-/etc/letsencrypt/live/mail.agilique.com/fullchain.pem}
-      - TLS_KEY_PATH=${TLS_KEY_PATH:-/etc/letsencrypt/live/mail.agilique.com/privkey.pem}
+      - TLS_CERT_PATH=${TLS_CERT_PATH:-/etc/letsencrypt/live/${MAIL_HOSTNAME}/fullchain.pem}
+      - TLS_KEY_PATH=${TLS_KEY_PATH:-/etc/letsencrypt/live/${MAIL_HOSTNAME}/privkey.pem}
     volumes:
       - caddy_data:/data/caddy:ro
       - blobstorage:/data/blobs

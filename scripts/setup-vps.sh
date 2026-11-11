@@ -154,6 +154,39 @@ if [ "${RECONFIGURE}" = true ]; then
         R2_SECRET_ACCESS_KEY=""
     fi
 
+    # SSL/TLS Certificates
+    echo ""
+    echo -e "${BOLD}${CYAN}=== Step 4: SSL/TLS Certificates (Let's Encrypt) ===${NC}"
+    LE_CERT="/etc/letsencrypt/live/${MAIL_HOSTNAME}/fullchain.pem"
+    LE_KEY="/etc/letsencrypt/live/${MAIL_HOSTNAME}/privkey.pem"
+
+    if [ -f "${LE_CERT}" ] && [ -f "${LE_KEY}" ]; then
+        echo -e "${GREEN}Found existing Let's Encrypt certificate for ${MAIL_HOSTNAME}!${NC}"
+        TLS_CERT_PATH="${LE_CERT}"
+        TLS_KEY_PATH="${LE_KEY}"
+    else
+        echo "No certificate currently found at ${LE_CERT}."
+        echo "1) Request official Let's Encrypt certificate now (via certbot standalone)"
+        echo "2) Proceed and attach certificate later"
+        read -rp "Select certificate option [1]: " CERT_CHOICE
+        CERT_CHOICE="${CERT_CHOICE:-1}"
+
+        if [ "${CERT_CHOICE}" = "1" ]; then
+            if ! command -v certbot &> /dev/null; then
+                echo -e "${YELLOW}Installing certbot...${NC}"
+                apt-get update -qq && apt-get install -y -qq certbot || yum install -y certbot || true
+            fi
+            echo -e "${YELLOW}Requesting Let's Encrypt certificate for ${MAIL_HOSTNAME}...${NC}"
+            if certbot certonly --standalone --non-interactive --agree-tos -m "${ACME_EMAIL}" -d "${MAIL_HOSTNAME}"; then
+                echo -e "${GREEN}Certificate obtained successfully!${NC}"
+            else
+                echo -e "${YELLOW}Certbot request did not succeed yet. Postarc will automatically discover certs once obtained.${NC}"
+            fi
+        fi
+        TLS_CERT_PATH="${LE_CERT}"
+        TLS_KEY_PATH="${LE_KEY}"
+    fi
+
     # Database & Security Secrets
     POSTGRES_DB="postarc"
     POSTGRES_USER="postarc"
@@ -171,6 +204,10 @@ if [ "${RECONFIGURE}" = true ]; then
 MAIL_DOMAIN=${MAIL_DOMAIN}
 MAIL_HOSTNAME=${MAIL_HOSTNAME}
 ACME_EMAIL=${ACME_EMAIL}
+
+# SSL/TLS Certificate Paths
+TLS_CERT_PATH=${TLS_CERT_PATH}
+TLS_KEY_PATH=${TLS_KEY_PATH}
 
 # Initial Postarc Admin Account
 ADMIN_EMAIL=${ADMIN_EMAIL}
