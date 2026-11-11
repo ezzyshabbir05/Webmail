@@ -87,7 +87,7 @@ where
                     }
                 }
             }
-            "LIST" => {
+            "LIST" | "LSUB" => {
                 let acc = match &authenticated_account {
                     Some(a) => a,
                     None => {
@@ -108,10 +108,10 @@ where
                         _ => "\\HasNoChildren",
                     };
                     writer
-                        .write_all(format!("* LIST ({}) \"/\" \"{}\"\r\n", special_flag, mb.name).as_bytes())
+                        .write_all(format!("* {} ({}) \"/\" \"{}\"\r\n", command, special_flag, mb.name).as_bytes())
                         .await?;
                 }
-                writer.write_all(format!("{} OK LIST completed\r\n", tag).as_bytes()).await?;
+                writer.write_all(format!("{} OK {} completed\r\n", tag, command).as_bytes()).await?;
             }
             "STATUS" => {
                 let acc = match &authenticated_account {
@@ -142,7 +142,7 @@ where
                     writer.write_all(format!("{} NO [NONEXISTENT] Mailbox not found\r\n", tag).as_bytes()).await?;
                 }
             }
-            "SELECT" => {
+            "SELECT" | "EXAMINE" => {
                 let acc = match &authenticated_account {
                     Some(a) => a,
                     None => {
@@ -161,9 +161,10 @@ where
                     let messages = state.repo.list_messages_for_imap(mb.id, 50000).await.unwrap_or_default();
                     let count = messages.len();
 
+                    let mode = if command == "EXAMINE" { "READ-ONLY" } else { "READ-WRITE" };
                     let res = format!(
-                        "* {} EXISTS\r\n* 0 RECENT\r\n* OK [UIDVALIDITY {}] UIDs valid\r\n* OK [UIDNEXT {}] Next UID\r\n* OK [HIGHESTMODSEQ {}] Highest\r\n* FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)\r\n* OK [PERMANENTFLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft \\*)] Limited\r\n{} OK [READ-WRITE] SELECT completed\r\n",
-                        count, mb.uid_validity, mb.next_uid, mb.highest_modseq, tag
+                        "* {} EXISTS\r\n* 0 RECENT\r\n* OK [UIDVALIDITY {}] UIDs valid\r\n* OK [UIDNEXT {}] Next UID\r\n* OK [HIGHESTMODSEQ {}] Highest\r\n* FLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft)\r\n* OK [PERMANENTFLAGS (\\Answered \\Flagged \\Deleted \\Seen \\Draft \\*)] Limited\r\n{} OK [{}] {} completed\r\n",
+                        count, mb.uid_validity, mb.next_uid, mb.highest_modseq, tag, mode, command
                     );
                     writer.write_all(res.as_bytes()).await?;
                     selected_mailbox = Some(mb);
@@ -173,7 +174,7 @@ where
                         .await?;
                 }
             }
-            "FETCH" | "UID" => {
+            "FETCH" | "UID" | "SEARCH" => {
                 let is_uid_cmd = command == "UID";
                 let actual_cmd = if is_uid_cmd && parts.len() > 2 { parts[2].to_uppercase() } else { command.clone() };
 
@@ -197,7 +198,12 @@ where
                     let total_count = messages.len() as i32;
 
                     let line_upper = trimmed.to_uppercase();
-                    let wants_body = line_upper.contains("BODY") || line_upper.contains("RFC822");
+                    let wants_full_body = line_upper.contains("BODY[]")
+                        || line_upper.contains("BODY.PEEK[]")
+                        || line_upper.contains("RFC822 ")
+                        || line_upper.ends_with("RFC822)")
+                        || line_upper.ends_with("RFC822");
+                    let wants_headers = line_upper.contains("HEADER");
 
                     for (idx, msg) in messages.iter().enumerate() {
                         let seq = (idx + 1) as i32;
@@ -228,12 +234,13 @@ where
                             flags_str.push_str("\\Answered ");
                         }
                         let flags_trimmed = flags_str.trim();
+                        let internal_date = msg.date.format("%d-%b-%Y %H:%M:%S +0000").to_string();
 
-                        if wants_body {
+                        if wants_full_body {
                             if let Ok(body_bytes) = state.storage.get_blob(&msg.blob_id).await {
                                 let body_header = format!(
-                                    "* {} FETCH (UID {} FLAGS ({}) RFC822.SIZE {} BODY[] {{{}}}\r\n",
-                                    seq, msg.uid, flags_trimmed, msg.size_bytes, body_bytes.len()
+                                    "* {} FETCH (UID {} FLAGS ({}) RFC822.SIZE {} INTERNALDATE \"{}\" BODY[] {{{}}}\r\n",
+                                    seq, msg.uid, flags_trimmed, msg.size_bytes, internal_date, body_bytes.len()
                                 );
                                 writer.write_all(body_header.as_bytes()).await?;
                                 writer.write_all(&body_bytes).await?;
@@ -246,11 +253,46 @@ where
                                 }
                                 continue;
                             }
+                        } else if wants_headers {
+                            if let Ok(body_bytes) = state.storage.get_blob(&msg.blob_id).await {
+                                let header_end = if let Some(pos) = body_bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                                    pos + 4
+                                } else if let Some(pos) = body_bytes.windows(2).position(|w| w == b"\n\n") {
+                                    pos + 2
+                                } else {
+                                    body_bytes.len()
+                                };
+                                let header_slice = &body_bytes[..header_end];
+
+                                let body_sec_tag = if let Some(start) = trimmed.find("BODY") {
+                                    if let Some(open) = trimmed[start..].find('[') {
+                                        if let Some(close) = trimmed[start + open..].find(']') {
+                                            let inside = &trimmed[start + open..start + open + close + 1];
+                                            format!("BODY{}", inside)
+                                        } else {
+                                            "BODY[HEADER]".to_string()
+                                        }
+                                    } else {
+                                        "BODY[HEADER]".to_string()
+                                    }
+                                } else {
+                                    "BODY[HEADER]".to_string()
+                                };
+
+                                let body_header = format!(
+                                    "* {} FETCH (UID {} FLAGS ({}) RFC822.SIZE {} INTERNALDATE \"{}\" {} {{{}}}\r\n",
+                                    seq, msg.uid, flags_trimmed, msg.size_bytes, internal_date, body_sec_tag, header_slice.len()
+                                );
+                                writer.write_all(body_header.as_bytes()).await?;
+                                writer.write_all(header_slice).await?;
+                                writer.write_all(b")\r\n").await?;
+                                continue;
+                            }
                         }
 
                         let fetch_resp = format!(
-                            "* {} FETCH (UID {} FLAGS ({}) RFC822.SIZE {})\r\n",
-                            seq, msg.uid, flags_trimmed, msg.size_bytes
+                            "* {} FETCH (UID {} FLAGS ({}) RFC822.SIZE {} INTERNALDATE \"{}\")\r\n",
+                            seq, msg.uid, flags_trimmed, msg.size_bytes, internal_date
                         );
                         writer.write_all(fetch_resp.as_bytes()).await?;
                     }
