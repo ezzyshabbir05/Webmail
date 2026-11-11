@@ -17,7 +17,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
-      - postarc-server
+      - postarc
       - postarc-webmail
 
   # ==============================================================================
@@ -35,12 +35,12 @@ services:
       - NODE_ENV=production
       - NEXT_PUBLIC_POSTARC_API_URL=https://${MAIL_HOSTNAME}
     depends_on:
-      - postarc-server
+      - postarc
 
   # ==============================================================================
   # Postarc Mailserver: Unified Single-Daemon Rust Engine
   # ==============================================================================
-  postarc-server:
+  postarc:
     build:
       context: ./server
       dockerfile: Dockerfile

@@ -23,6 +23,14 @@ RED='\033[0;31m'
 BOLD='\033[1m'
 NC='\033[0m'
 
+# Source .env if present
+if [ -f "${PROJECT_ROOT}/.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "${PROJECT_ROOT}/.env" 2>/dev/null || true
+    set +a
+fi
+
 # Determine Docker Compose Command
 if docker compose version &> /dev/null; then
     COMPOSE_CMD="docker compose"
@@ -33,7 +41,7 @@ else
 fi
 
 COMPOSE_FILE="docker-compose.yml"
-if [ -f "docker-compose.prod.yml" ] && [ "${POSTARC_STACK_TYPE:-}" = "prod" ]; then
+if [ -f "docker-compose.prod.yml" ] && ([ "${POSTARC_STACK_TYPE:-}" = "prod" ] || ([ -n "${MAIL_HOSTNAME:-}" ] && [ "${MAIL_HOSTNAME:-}" != "localhost" ])); then
     COMPOSE_FILE="docker-compose.prod.yml"
 fi
 
