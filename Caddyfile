@@ -1,0 +1,41 @@
+{
+    email {$ACME_EMAIL:admin@agilique.com}
+    admin off
+}
+
+{$MAIL_HOSTNAME:mail.agilique.com} {
+    encode zstd gzip
+
+    # Security Headers
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # Route JMAP discovery and API calls to Postarc Mailserver backend
+    @jmap {
+        path /.well-known/jmap*
+        path /api/jmap*
+        path /api/events*
+        path /api/blob/*
+        path /api/upload/*
+    }
+    handle @jmap {
+        reverse_proxy postarc-server:8080 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # Route all other web traffic to Postarc Webmail Next.js frontend
+    handle {
+        reverse_proxy postarc-webmail:3000 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+}

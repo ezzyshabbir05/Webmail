@@ -1,0 +1,121 @@
+services:
+  # ==============================================================================
+  # Caddy: Automated Let's Encrypt TLS & Edge Reverse Proxy
+  # ==============================================================================
+  caddy:
+    image: caddy:2-alpine
+    container_name: postarc-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME:-mail.agilique.com}
+      ACME_EMAIL: ${ACME_EMAIL:-admin@agilique.com}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - postarc-server
+      - postarc-webmail
+
+  # ==============================================================================
+  # Postarc Webmail: Next.js 16 + Astryx UI Frontend
+  # ==============================================================================
+  postarc-webmail:
+    build:
+      context: ./webmail
+      dockerfile: Dockerfile
+    container_name: postarc-webmail
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_POSTARC_API_URL=https://${MAIL_HOSTNAME:-mail.agilique.com}
+    depends_on:
+      - postarc-server
+
+  # ==============================================================================
+  # Postarc Mailserver: Unified Single-Daemon Rust Engine
+  # ==============================================================================
+  postarc-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: postarc-server
+    restart: unless-stopped
+    ports:
+      - "25:25"      # Inbound SMTP (MTA)
+      - "465:465"    # SMTPS (Implicit TLS)
+      - "587:587"    # Submission (STARTTLS)
+      - "993:993"    # IMAPS (RFC 9051)
+      - "4190:4190"  # ManageSieve
+    expose:
+      - "8080"       # JMAP / HTTP internal
+    environment:
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postarc}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-postarc}
+      - MAIL_DOMAIN=${MAIL_DOMAIN:-agilique.com}
+      - MAIL_HOSTNAME=${MAIL_HOSTNAME:-mail.agilique.com}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-s3}
+      - STORAGE_FS_PATH=/data/blobs
+      - R2_BUCKET=${R2_BUCKET}
+      - R2_ENDPOINT=${R2_ENDPOINT}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+      - RSPAMD_URL=http://rspamd:11333
+      - JWT_SECRET=${JWT_SECRET}
+      - SMTP_BIND_ADDR=0.0.0.0:25
+      - SUBMISSION_BIND_ADDR=0.0.0.0:587
+      - IMAPS_BIND_ADDR=0.0.0.0:993
+      - JMAP_BIND_ADDR=0.0.0.0:8080
+    volumes:
+      - caddy_data:/data/caddy:ro
+      - blobstorage:/data/blobs
+      - dkim_keys:/data/dkim
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rspamd:
+        condition: service_started
+
+  # ==============================================================================
+  # PostgreSQL 17: Relational Metadata & Native GIN Full-Text Search
+  # ==============================================================================
+  postgres:
+    image: postgres:17-alpine
+    container_name: postarc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postarc}
+      POSTGRES_USER: ${POSTGRES_USER:-postarc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postarc} -d ${POSTGRES_DB:-postarc}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ==============================================================================
+  # Rspamd: High-Performance Bayes Spam & Antivirus Engine
+  # ==============================================================================
+  rspamd:
+    image: rspamd/rspamd:latest
+    container_name: postarc-rspamd
+    restart: unless-stopped
+    expose:
+      - "11333"
+    volumes:
+      - rspamd_data:/var/lib/rspamd
+      - dkim_keys:/var/lib/rspamd/dkim:ro
+
+volumes:
+  caddy_data:
+  caddy_config:
+  pgdata:
+  blobstorage:
+  rspamd_data:
+  dkim_keys:

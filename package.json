@@ -15,6 +15,10 @@
     "server:up": "docker compose up -d",
     "server:down": "docker compose down",
     "server:logs": "docker compose logs -f postarc",
-    "server:rebuild": "docker compose up -d --build"
+    "server:rebuild": "docker compose up -d --build",
+    "prod:up": "docker compose -f docker-compose.prod.yml up -d",
+    "prod:down": "docker compose -f docker-compose.prod.yml down",
+    "prod:logs": "docker compose -f docker-compose.prod.yml logs -f",
+    "prod:build": "docker compose -f docker-compose.prod.yml build"
   }
 }
