@@ -40,9 +40,9 @@ else
     COMPOSE_CMD=""
 fi
 
-COMPOSE_FILE="docker-compose.yml"
-if [ -f "docker-compose.prod.yml" ] && ([ "${POSTARC_STACK_TYPE:-}" = "prod" ] || ([ -n "${MAIL_HOSTNAME:-}" ] && [ "${MAIL_HOSTNAME:-}" != "localhost" ])); then
-    COMPOSE_FILE="docker-compose.prod.yml"
+COMPOSE_FILE="docker-compose.prod.yml"
+if [ ! -f "docker-compose.prod.yml" ] || [ "${POSTARC_STACK_TYPE:-}" = "dev" ]; then
+    COMPOSE_FILE="docker-compose.yml"
 fi
 
 get_exec_flags() {
@@ -1045,6 +1045,8 @@ case "${CMD}" in
         ${COMPOSE_CMD} -f "${COMPOSE_FILE}" ps
         echo ""
         echo -e "${BOLD}${CYAN}Active Listening Ports:${NC}"
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port caddy 80 2>/dev/null && echo "  - Port 80:   HTTP (Auto Let's Encrypt)" || true
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port caddy 443 2>/dev/null && echo "  - Port 443:  HTTPS (Webmail & JMAP)" || true
         ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port postarc 25 2>/dev/null && echo "  - Port 25:   SMTP Inbound MTA" || true
         ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port postarc 143 2>/dev/null && echo "  - Port 143:  IMAP (STARTTLS)" || true
         ${COMPOSE_CMD} -f "${COMPOSE_FILE}" port postarc 465 2>/dev/null && echo "  - Port 465:  SMTPS (Implicit TLS)" || true
