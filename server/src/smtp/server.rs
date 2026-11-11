@@ -7,7 +7,17 @@ use crate::tls::TlsManager;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::{debug, error, info, warn};
+
+fn is_disconnect_error(e: &(dyn std::error::Error + 'static)) -> bool {
+    let msg = e.to_string();
+    msg.contains("Connection reset by peer")
+        || msg.contains("Broken pipe")
+        || msg.contains("connection closed")
+        || msg.contains("UnexpectedEof")
+        || msg.contains("os error 104")
+        || msg.contains("os error 32")
+}
 
 pub async fn run_smtp_listener(
     bind_addr: SocketAddr,
@@ -52,7 +62,14 @@ pub async fn run_smtp_listener(
                     Some(acc) => match acc.accept(socket).await {
                         Ok(tls_socket) => MaybeTlsStream::Tls(tls_socket),
                         Err(e) => {
-                            error!("SMTPS TLS handshake failed from {}: {}", remote_addr, e);
+                            let msg = e.to_string();
+                            if msg.contains("CertificateUnknown") {
+                                warn!("SMTPS client {} rejected TLS certificate (self-signed cert untrusted by client)", remote_addr);
+                            } else if is_disconnect_error(&e) {
+                                debug!("SMTPS client {} disconnected during TLS handshake", remote_addr);
+                            } else {
+                                warn!("SMTPS TLS handshake failed from {}: {}", remote_addr, e);
+                            }
                             return;
                         }
                     },
@@ -66,7 +83,11 @@ pub async fn run_smtp_listener(
             };
 
             if let Err(e) = handle_smtp_session(initial_stream, remote_addr, session_state).await {
-                error!("SMTP session error with {}: {}", remote_addr, e);
+                if is_disconnect_error(&*e) {
+                    debug!("SMTP client {} disconnected gracefully", remote_addr);
+                } else {
+                    warn!("SMTP session ended for {}: {}", remote_addr, e);
+                }
             }
         });
     }

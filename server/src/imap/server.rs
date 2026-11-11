@@ -6,7 +6,17 @@ use crate::tls::TlsManager;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tracing::{error, info};
+use tracing::{debug, error, info, warn};
+
+fn is_disconnect_error(e: &(dyn std::error::Error + 'static)) -> bool {
+    let msg = e.to_string();
+    msg.contains("Connection reset by peer")
+        || msg.contains("Broken pipe")
+        || msg.contains("connection closed")
+        || msg.contains("UnexpectedEof")
+        || msg.contains("os error 104")
+        || msg.contains("os error 32")
+}
 
 pub async fn run_imap_listener(
     bind_addr: SocketAddr,
@@ -41,11 +51,22 @@ pub async fn run_imap_listener(
                     match acceptor.accept(socket).await {
                         Ok(tls_stream) => {
                             if let Err(e) = handle_imap_session(tls_stream, session_state).await {
-                                error!("IMAPS session error with {}: {}", remote_addr, e);
+                                if is_disconnect_error(&*e) {
+                                    debug!("IMAPS client {} disconnected gracefully", remote_addr);
+                                } else {
+                                    warn!("IMAPS session ended for {}: {}", remote_addr, e);
+                                }
                             }
                         }
                         Err(e) => {
-                            error!("IMAPS TLS handshake failed with {}: {}", remote_addr, e);
+                            let msg = e.to_string();
+                            if msg.contains("CertificateUnknown") {
+                                warn!("IMAPS client {} rejected TLS certificate (self-signed cert untrusted by client)", remote_addr);
+                            } else if is_disconnect_error(&e) {
+                                debug!("IMAPS client {} disconnected during TLS handshake", remote_addr);
+                            } else {
+                                warn!("IMAPS TLS handshake failed with {}: {}", remote_addr, e);
+                            }
                         }
                     }
                 } else {
@@ -53,7 +74,11 @@ pub async fn run_imap_listener(
                 }
             } else {
                 if let Err(e) = handle_imap_session(socket, session_state).await {
-                    error!("IMAP session error with {}: {}", remote_addr, e);
+                    if is_disconnect_error(&*e) {
+                        debug!("IMAP client {} disconnected gracefully", remote_addr);
+                    } else {
+                        warn!("IMAP session ended for {}: {}", remote_addr, e);
+                    }
                 }
             }
         });

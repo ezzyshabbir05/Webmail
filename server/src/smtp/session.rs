@@ -105,12 +105,20 @@ pub async fn handle_smtp_session(
     let mut auth_account: Option<Account> = None;
 
     loop {
-        let mut line = String::new();
-        let bytes_read = reader.read_line(&mut line).await?;
+        let mut raw_cmd = Vec::new();
+        let bytes_read = reader.read_until(b'\n', &mut raw_cmd).await?;
         if bytes_read == 0 {
             break;
         }
 
+        // Detect TLS ClientHello sent to plaintext port (starts with 0x16 0x03)
+        if raw_cmd.starts_with(&[0x16, 0x03]) {
+            warn!("Client {} sent TLS ClientHello to plaintext SMTP port; closing session", remote_addr);
+            let _ = writer.write_all(b"554 5.7.0 Plaintext connection required; use STARTTLS or port 465 for SMTPS\r\n").await;
+            break;
+        }
+
+        let line = String::from_utf8_lossy(&raw_cmd);
         let trimmed = line.trim();
         debug!("SMTP [{}] RECV: {}", remote_addr, trimmed);
 
@@ -186,9 +194,9 @@ pub async fn handle_smtp_session(
                 parts[2].to_string()
             } else {
                 writer.write_all(b"334 \r\n").await?;
-                let mut buf = String::new();
-                reader.read_line(&mut buf).await?;
-                buf
+                let mut buf = Vec::new();
+                reader.read_until(b'\n', &mut buf).await?;
+                String::from_utf8_lossy(&buf).trim().to_string()
             };
 
             let mut authed = false;
@@ -222,12 +230,14 @@ pub async fn handle_smtp_session(
             }
 
             writer.write_all(b"334 VXNlcm5hbWU6\r\n").await?;
-            let mut user_b64 = String::new();
-            reader.read_line(&mut user_b64).await?;
+            let mut user_buf = Vec::new();
+            reader.read_until(b'\n', &mut user_buf).await?;
+            let user_b64 = String::from_utf8_lossy(&user_buf).trim().to_string();
 
             writer.write_all(b"334 UGFzc3dvcmQ6\r\n").await?;
-            let mut pass_b64 = String::new();
-            reader.read_line(&mut pass_b64).await?;
+            let mut pass_buf = Vec::new();
+            reader.read_until(b'\n', &mut pass_buf).await?;
+            let pass_b64 = String::from_utf8_lossy(&pass_buf).trim().to_string();
 
             let mut authed = false;
             if let (Ok(user_bytes), Ok(pass_bytes)) = (base64_decode(user_b64.trim()), base64_decode(pass_b64.trim())) {
@@ -297,26 +307,25 @@ pub async fn handle_smtp_session(
 
             let mut message_bytes = Vec::new();
             loop {
-                let mut data_line = String::new();
-                let n = reader.read_line(&mut data_line).await?;
+                let mut data_buf = Vec::new();
+                let n = reader.read_until(b'\n', &mut data_buf).await?;
                 if n == 0 {
                     break;
                 }
 
-                let line_str = data_line.trim_end_matches(['\r', '\n']);
-                if line_str == "." {
+                // Check end of DATA indicator <CRLF>.<CRLF> or <LF>.<LF>
+                if data_buf == b".\r\n" || data_buf == b".\n" {
                     break;
                 }
 
-                // Dot-unstuffing
-                let line_to_write = if line_str.starts_with("..") {
-                    &line_str[1..]
+                // RFC 5321 Dot-unstuffing: leading '.' is removed if line starts with '..'
+                let slice = if data_buf.starts_with(b"..") {
+                    &data_buf[1..]
                 } else {
-                    line_str
+                    &data_buf[..]
                 };
 
-                message_bytes.extend_from_slice(line_to_write.as_bytes());
-                message_bytes.extend_from_slice(b"\r\n");
+                message_bytes.extend_from_slice(slice);
             }
 
             let mut delivery_success = false;
