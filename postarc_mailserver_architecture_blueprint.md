@@ -66,7 +66,7 @@ Every crate is chosen for compatibility, stability, active maintenance, and pure
 | **Rule Engine** | `sieve` (`v0.7`) | RFC 5228 Sieve script compilation and execution (vacation, redirect, filing). |
 | **Identity & Passwords** | `argon2`, `jsonwebtoken` | Argon2id for SASL authentication; signed JWTs for JMAP session bearer tokens. |
 | **DNS Resolution** | `hickory-resolver` | Async DNSSEC-validated resolution for MX records, SPF, DKIM, and DMARC lookups. |
-| **Database & Metadata** | `sqlx` (`postgres`, `runtime-tokio`) | Direct async connection pooling (`sqlx::PgPool`) for accounts, mailboxes, and UIDs. |
+| **Relational Metadata Tier** | `PostgreSQL 17+` via `sqlx` (v0.9) | Direct connection-pooled relational store for accounts, mailboxes, IMAP UIDs, and monotonic `MODSEQ`. |
 | **Full-Text Search** | PostgreSQL `tsvector` + `GIN` | Built-in search for subjects, senders, recipients, and body snippets. Zero external indexers. |
 | **Blob Storage** | `aws-sdk-s3` | S3-compatible client for Cloudflare R2 / AWS S3 blob storage. |
 | **Antispam Inspection** | `Rspamd` (HTTP API) | Offloaded spam scoring, virus scanning, and neural reputation check via async HTTP stream. |
