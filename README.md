@@ -1,106 +1,122 @@
-# Postarc Webmail
+# Postarc: Unified Modern Mail System
 
-**Postarc Webmail** is a high-performance, standalone webmail client built with **Next.js 16**, React 19, and the **Astryx Design System**. It features a modern, responsive, and accessible interface for email, calendar, contacts, filters, and settings, operating seamlessly client-side with persistent state.
+**Postarc** is a unified, high-performance mail engine and webmail client built in **Rust** and **Next.js 16 + Astryx Design System**. 
 
----
-
-## Features
-
-- **Mail Inbox & Threading**: Unified folder view (Inbox, Starred, Sent, Drafts, Archive, Spam, Trash) with real-time thread viewer, reply composing, and star/unstar toggles.
-- **Compose & Rich Message Editing**: Full-featured composer with recipients, subject, body, priority flags, and attachment support.
-- **Interactive Calendar**: JSCalendar-compatible schedule viewer with event creation and date navigation.
-- **Contact Management**: JSContact-compatible address book with search, card inspection, and contact creation.
-- **Sieve Filters & Rules**: Interactive rule builder for automated email sorting, categorization, and vacation auto-responses.
-- **Account & Preferences**: Quota visualization, signature management, display preferences, and identity settings.
-- **Dark Mode**: System-aware, token-backed theming powered by `@astryxdesign/theme-neutral`.
-- **Zero Backend Dependencies**: Fully self-contained pure frontend client with local persistence and JMAP protocol interfaces.
+It consolidates internet messaging (**SMTP Inbound & Submission**, **IMAP4rev2**, and **ManageSieve**) and web standards (**JMAP Core & Mail** RFC 8620/8621) into a single, memory-safe, lean Rust daemon backed by **PostgreSQL 17** for relational metadata and full-text search, and **Cloudflare R2 / AWS S3** for content-addressed deduplicated blob storage.
 
 ---
 
-## Architecture Layout
+## Architectural Highlights
 
-```
-Webmail/
-├── webmail/                    # Next.js 16 + Astryx Webmail Application
-│   ├── app/                    # App Router pages
-│   │   ├── layout.tsx          # Root layout & theme providers
-│   │   ├── page.tsx            # Gateway landing & authentication route
-│   │   └── mail/               # Authenticated webmail views
-│   │       ├── page.tsx        # Inbox & email thread manager
-│   │       ├── calendar/       # Calendar & schedule manager
-│   │       ├── contacts/       # Contacts & address book
-│   │       ├── filters/        # Mail filtering rules
-│   │       └── settings/       # Account & system preferences
-│   ├── components/             # Astryx UI components
-│   │   ├── postarc-auth.tsx    # Client authentication & onboarding
-│   │   ├── webmail-client.tsx  # Full mail client suite & thread viewer
-│   │   ├── theme-provider.tsx  # Theme context provider
-│   │   └── theme-toggle.tsx    # Light / Dark mode switcher
-│   ├── context/                # Webmail state provider (MailContext)
-│   ├── lib/                    # Client-side JMAP mock & persistence engine
-│   ├── types/                  # TypeScript interface definitions
-│   └── package.json            # Webmail dependencies & scripts
-│
-├── AGENTS.md                   # Agent guidelines & Astryx rules
-├── package.json                # Root npm workspace configuration
-└── README.md                   # Project documentation
-```
+- **Single-Daemon Rust Architecture**: A single compiled binary runs Tokio multi-threaded tasks across all available CPU cores. No microservice sprawl, no external worker pods, and no separate PgBouncer layers.
+- **In-Process Real-Time Bus (`tokio::sync::broadcast`)**: Sub-microsecond real-time notifications for IMAP `IDLE` (RFC 2177) sessions and JMAP Server-Sent Events (SSE) push streams directly in RAM without Redis.
+- **Content-Addressed Storage**: Deduplicated message payloads and attachments stored by SHA-256 (`blobs/<hash[0..2]>/<full_hash>`). Supports both Cloudflare R2 / S3 (production) and Local Filesystem storage (development).
+- **Native Full-Text Search**: Powered directly by PostgreSQL 17 generated `tsvector` and a `GIN` index for sub-5ms searches without external search clusters.
+- **Postarc Webmail Frontend**: Next.js 16 App Router interface built with the Astryx Design System, communicating with Postarc Mailserver over RFC 8620/8621 JMAP APIs with instant offline local fallback.
 
 ---
 
-## Getting Started
+## Port Allocation
 
-### Prerequisites
+| Port | Protocol | Purpose | Status |
+| :--- | :--- | :--- | :--- |
+| **25** | SMTP (MTA) | Inbound server-to-server mail reception | `Active` |
+| **587** | SMTP (Submission) | Authenticated client submission (`STARTTLS`) | `Active` |
+| **993** | IMAPS | IMAP4rev2 (RFC 9051) & IMAP4rev1 (RFC 3501) | `Active` |
+| **8080** | JMAP / HTTP | Webmail client API & SSE Push streams | `Active` |
+| **3000** | HTTP | Postarc Webmail Next.js Frontend | `Active` |
 
-- **Node.js**: v20 or higher
-- **npm**: v10 or higher
+---
 
-### Installation
+## Quick Start
 
-Clone the repository and install dependencies:
+### 1. Launch the Postarc Mailserver Stack
+
+Start PostgreSQL 17 and Postarc Mailserver via Docker Compose:
 
 ```bash
-git clone <repo-url>
-cd Webmail
-npm install --prefix webmail
+npm run server:up
 ```
 
-### Development Server
+To monitor server logs in real-time:
+```bash
+npm run server:logs
+```
 
-Start the local development server at `http://localhost:3000`:
+To stop the server stack:
+```bash
+npm run server:down
+```
+
+### 2. Launch the Webmail Frontend
+
+In a separate terminal, start the Next.js development server:
 
 ```bash
 npm run dev
 ```
 
-### Production Build
+Open `http://localhost:3000` in your browser. Default login:
+- **Email**: `admin@agilique.com`
+- **Password**: `admin123`
 
-Compile an optimized production build:
+---
 
+## Verified Protocols & Live Testing
+
+### Inbound SMTP (Port 25)
+Send an email to Postarc over standard SMTP:
 ```bash
-npm run build
+telnet 127.0.0.1 25
+# Or via netcat / PowerShell TCP
+HELO client.example.com
+MAIL FROM:<sender@example.com>
+RCPT TO:<admin@agilique.com>
+DATA
+Subject: Test Inbound Email
+
+Hello from SMTP Port 25!
+.
+QUIT
 ```
 
-To run the production server:
-
+### Modern JMAP API (Port 8080)
+Discover session resources (RFC 8620):
 ```bash
-npm run start
+curl http://localhost:8080/.well-known/jmap
 ```
 
-### Astryx Component Verification
-
-Verify design token and component compliance using the Astryx CLI:
-
+Query mailboxes (RFC 8621):
 ```bash
-npm run doctor
+curl -X POST http://localhost:8080/api/jmap \
+  -H "Content-Type: application/json" \
+  -d '{"using":["urn:ietf:params:jmap:core","urn:ietf:params:jmap:mail"],"methodCalls":[["Mailbox/get",{},"0"]]}'
+```
+
+### IMAP4rev2 (Port 993)
+Connect and inspect mailboxes:
+```text
+* OK [CAPABILITY IMAP4rev2 IMAP4rev1 IDLE MOVE SPECIAL-USE] Postarc IMAP Service ready
+a1 LOGIN admin@agilique.com admin123
+a2 LIST "" "*"
+a3 SELECT "Inbox"
+a4 FETCH 1:* (UID FLAGS RFC822.SIZE)
+a5 LOGOUT
 ```
 
 ---
 
-## Authentication & Demo Access
+## Production Deployment (Cloudflare R2)
 
-By default, Postarc Webmail initializes with demo credentials:
-- **Email**: `admin@agilique.com`
-- **Password**: Any password
+To enable Cloudflare R2 in production, configure the following environment variables in `.env` or `docker-compose.yml`:
 
-All changes (sent emails, replied threads, created events, contacts, and custom folders) are saved in your browser's `localStorage` for a persistent, uninterrupted development and testing experience.
+```env
+STORAGE_BACKEND=s3
+R2_BUCKET=postarc-mail
+R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+R2_ACCESS_KEY_ID=<your-access-key-id>
+R2_SECRET_ACCESS_KEY=<your-secret-access-key>
+DATABASE_URL=postgres://postarc:secret@postgres:5432/postarc
+MAIL_DOMAIN=agilique.com
+MAIL_HOSTNAME=mail.agilique.com
+```

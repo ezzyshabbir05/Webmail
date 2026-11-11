@@ -757,6 +757,31 @@ export class PostarcClient {
     return this.accountId || "admin"
   }
 
+  private getBackendUrl(): string {
+    if (typeof window !== "undefined") {
+      return (window as unknown as { NEXT_PUBLIC_POSTARC_API_URL?: string }).NEXT_PUBLIC_POSTARC_API_URL || "http://localhost:8080"
+    }
+    return process.env.NEXT_PUBLIC_POSTARC_API_URL || "http://localhost:8080"
+  }
+
+  public async fetchLiveJmap(method: string, args: Record<string, unknown>): Promise<unknown | null> {
+    try {
+      const res = await fetch(`${this.getBackendUrl()}/api/jmap`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          using: ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
+          methodCalls: [[method, args, "c0"]],
+        }),
+      })
+      if (!res.ok) return null
+      const json = await res.json()
+      return json?.methodResponses?.[0]?.[1] || null
+    } catch {
+      return null
+    }
+  }
+
   public async getMailboxByRole(role: string): Promise<JmapMailbox | null> {
     const target = role.toLowerCase()
     return (
@@ -768,6 +793,24 @@ export class PostarcClient {
 
   public async getMailboxes(): Promise<JmapMailbox[]> {
     this.loadFromStorage()
+    try {
+      const live = (await this.fetchLiveJmap("Mailbox/get", {})) as { list?: JmapMailbox[] } | null
+      if (live?.list && live.list.length > 0) {
+        for (const lmb of live.list) {
+          const idx = this.mailboxes.findIndex(
+            (m) => m.id === lmb.id || (m.role && m.role === lmb.role)
+          )
+          if (idx >= 0) {
+            this.mailboxes[idx] = { ...this.mailboxes[idx], ...lmb }
+          } else {
+            this.mailboxes.push(lmb)
+          }
+        }
+        this.saveToStorage()
+      }
+    } catch {
+      // Graceful fallback to local cache
+    }
     return [...this.mailboxes]
   }
 
@@ -829,6 +872,42 @@ export class PostarcClient {
     position?: number
   }): Promise<{ emails: JmapEmail[]; total: number }> {
     this.loadFromStorage()
+
+    try {
+      const queryArgs: Record<string, unknown> = {
+        limit: options.limit || 50,
+        position: options.position || 0,
+      }
+      if (options.mailboxId) {
+        queryArgs.filter = { inMailbox: options.mailboxId }
+      }
+      if (options.searchQuery) {
+        queryArgs.filter = { text: options.searchQuery }
+      }
+
+      const liveQuery = (await this.fetchLiveJmap("Email/query", queryArgs)) as {
+        ids?: string[]
+      } | null
+      if (liveQuery?.ids && liveQuery.ids.length > 0) {
+        const liveGet = (await this.fetchLiveJmap("Email/get", { ids: liveQuery.ids })) as {
+          list?: JmapEmail[]
+        } | null
+        if (liveGet?.list && liveGet.list.length > 0) {
+          for (const le of liveGet.list) {
+            const idx = this.emails.findIndex((e) => e.id === le.id)
+            if (idx >= 0) {
+              this.emails[idx] = le
+            } else {
+              this.emails.unshift(le)
+            }
+          }
+          this.saveToStorage()
+        }
+      }
+    } catch {
+      // Graceful fallback to local cache
+    }
+
     let list = [...this.emails]
 
     if (options.mailboxId) {

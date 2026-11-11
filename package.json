@@ -1,7 +1,7 @@
 {
   "name": "postarc-webmail",
   "version": "1.0.0",
-  "description": "Postarc Webmail - Modern Next.js 16 + Astryx Email Client Frontend",
+  "description": "Postarc Webmail - Unified Rust Mailserver + Next.js 16 Astryx Frontend",
   "private": true,
   "workspaces": [
     "webmail"
@@ -11,6 +11,10 @@
     "build": "npm --prefix webmail run build",
     "start": "npm --prefix webmail run start",
     "lint": "npm --prefix webmail run lint",
-    "doctor": "npm --prefix webmail run doctor"
+    "doctor": "npm --prefix webmail run doctor",
+    "server:up": "docker compose up -d",
+    "server:down": "docker compose down",
+    "server:logs": "docker compose logs -f postarc",
+    "server:rebuild": "docker compose up -d --build"
   }
 }
