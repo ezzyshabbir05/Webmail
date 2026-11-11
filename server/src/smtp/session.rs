@@ -134,7 +134,7 @@ pub async fn handle_smtp_session(
                 response.push_str("250-STARTTLS\r\n");
             }
 
-            if state.is_submission && is_tls && !is_authenticated {
+            if is_tls && !is_authenticated {
                 response.push_str("250-AUTH PLAIN LOGIN\r\n");
             }
 
@@ -184,7 +184,7 @@ pub async fn handle_smtp_session(
                 }
             }
         } else if upper.starts_with("AUTH PLAIN") {
-            if state.is_submission && !is_tls {
+            if !is_tls {
                 writer.write_all(b"538 5.7.11 Encryption required for requested authentication mechanism\r\n").await?;
                 continue;
             }
@@ -224,7 +224,7 @@ pub async fn handle_smtp_session(
                 writer.write_all(b"535 5.7.8 Authentication credentials invalid\r\n").await?;
             }
         } else if upper.starts_with("AUTH LOGIN") {
-            if state.is_submission && !is_tls {
+            if !is_tls {
                 writer.write_all(b"538 5.7.11 Encryption required for requested authentication mechanism\r\n").await?;
                 continue;
             }
@@ -266,6 +266,17 @@ pub async fn handle_smtp_session(
                 writer.write_all(b"530 5.7.0 Authentication required\r\n").await?;
                 continue;
             }
+
+            // Anti-Spoofing: If connecting from untrusted external IP without authentication,
+            // reject attempts to claim a local domain/address as the sender.
+            if !is_authenticated && !remote_ip.is_loopback() && !crate::security::is_private_or_loopback(&remote_ip) {
+                if let Ok(Some(_)) = state.repo.resolve_recipient(&addr).await {
+                    warn!("Anti-Spoofing: Blocked unauthenticated sender {} claiming local domain from {}", addr, remote_addr);
+                    writer.write_all(b"550 5.7.1 Authentication required to send as local domain\r\n").await?;
+                    continue;
+                }
+            }
+
             mail_from = Some(addr);
             writer.write_all(b"250 2.1.0 Sender OK\r\n").await?;
         } else if upper.starts_with("RCPT TO:") {
@@ -343,6 +354,7 @@ pub async fn handle_smtp_session(
                         Some(remote_ip),
                         &state.hostname,
                         &message_bytes,
+                        false,
                     )
                     .await
                     {

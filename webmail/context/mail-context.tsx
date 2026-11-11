@@ -180,19 +180,19 @@ function mapJmapEmailToThread(
       if (lowerName === "authentication-results") {
         if (lowerVal.includes("spf=fail")) spfStatus = "fail"
         else if (lowerVal.includes("spf=softfail") || lowerVal.includes("spf=neutral")) spfStatus = "neutral"
+        else if (lowerVal.includes("spf=pass")) spfStatus = "pass"
 
         if (lowerVal.includes("dkim=fail")) dkimStatus = "fail"
+        else if (lowerVal.includes("dkim=pass")) dkimStatus = "pass"
 
-        if (
-          lowerVal.includes("dmarc=reject") ||
-          lowerVal.includes("dmarc=quarantine") ||
-          lowerVal.includes("dmarc=fail")
-        ) {
+        if (lowerVal.includes("dmarc=fail")) {
           dmarcStatus = "fail"
+        } else if (lowerVal.includes("dmarc=pass")) {
+          dmarcStatus = "pass"
         }
       } else if (lowerName === "x-spam-status" && lowerVal.startsWith("yes")) {
-        spfStatus = "fail"
-        dmarcStatus = "fail"
+        if (spfStatus !== "pass") spfStatus = "fail"
+        if (dmarcStatus !== "pass") dmarcStatus = "fail"
       }
     }
   }

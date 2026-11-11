@@ -3,4 +3,4 @@ pub mod spam;
 
 pub use rate_limit::SecurityManager;
 #[allow(unused_imports)]
-pub use spam::{DmarcPolicy, SpamDetector, SpamReport, SpfResult};
+pub use spam::{is_private_or_loopback, DmarcPolicy, DmarcResult, SpamDetector, SpamReport, SpfResult};

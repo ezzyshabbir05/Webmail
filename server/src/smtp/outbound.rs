@@ -112,6 +112,7 @@ pub fn spawn_outbound_queue_worker(
                             None,
                             &hostname,
                             &payload,
+                            true,
                         )
                         .await
                         {
@@ -236,6 +237,7 @@ pub fn spawn_outbound_queue_worker(
                             None,
                             &hostname,
                             bounce_body.as_bytes(),
+                            true,
                         )
                         .await;
                         info!("Generated and delivered RFC 3464 DSN Bounce to local sender {}", sender);

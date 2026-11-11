@@ -20,6 +20,7 @@ pub async fn process_inbound_mail(
     client_ip: Option<IpAddr>,
     hostname: &str,
     payload: &[u8],
+    is_authenticated: bool,
 ) -> Result<Uuid, String> {
     let clean_rcpt = recipient_email
         .trim()
@@ -107,7 +108,13 @@ pub async fn process_inbound_mail(
 
     // 3. Inbound Spam & Phishing Defense (Native DNSBL + SPF + DMARC)
     let spam_detector = crate::security::SpamDetector::new();
-    let spam_report = spam_detector.evaluate(client_ip, sender_envelope, &from_addr).await;
+    let is_sender_local = repo.resolve_recipient(sender_envelope).await.ok().flatten().is_some();
+    let is_trusted_network = client_ip.map(|ip| crate::security::is_private_or_loopback(&ip)).unwrap_or(true);
+    let is_internal_delivery = is_authenticated || (is_sender_local && is_trusted_network);
+
+    let spam_report = spam_detector
+        .evaluate(client_ip, sender_envelope, &from_addr, is_internal_delivery)
+        .await;
 
     let is_spam = spam_report.is_spam;
     let total_score = spam_report.score;

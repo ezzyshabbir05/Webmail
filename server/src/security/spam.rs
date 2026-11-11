@@ -46,6 +46,23 @@ impl std::fmt::Display for DmarcPolicy {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DmarcResult {
+    Pass,
+    Fail,
+    None,
+}
+
+impl std::fmt::Display for DmarcResult {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DmarcResult::Pass => write!(f, "pass"),
+            DmarcResult::Fail => write!(f, "fail"),
+            DmarcResult::None => write!(f, "none"),
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct DnsblListing {
@@ -60,11 +77,13 @@ pub struct SpamReport {
     pub score: f64,
     pub dnsbl_hits: Vec<DnsblListing>,
     pub spf_result: SpfResult,
+    pub dmarc_result: DmarcResult,
     pub dmarc_policy: Option<DmarcPolicy>,
     pub reasons: Vec<String>,
     pub client_ip: Option<IpAddr>,
     pub sender_envelope: String,
     pub from_domain: String,
+    pub is_internal_or_authenticated: bool,
 }
 
 impl SpamReport {
@@ -95,27 +114,44 @@ impl SpamReport {
             .map(|ip| ip.to_string())
             .unwrap_or_else(|| "127.0.0.1".to_string());
 
-        let dmarc_field = match &self.dmarc_policy {
-            Some(p) => format!(";\r\n    dmarc={} (p={}) header.from={}", p, p, self.from_domain),
-            None => String::new(),
-        };
-
-        let dnsbl_field = if !self.dnsbl_hits.is_empty() {
-            let lists = self
-                .dnsbl_hits
-                .iter()
-                .map(|h| h.list.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!(";\r\n    ip-reputation=listed (dnsbl={})", lists)
+        if self.is_internal_or_authenticated {
+            out.push_str(&format!(
+                "Authentication-Results: {};\r\n    auth=pass (authenticated local delivery);\r\n    spf=pass (internal/local) smtp.mailfrom={};\r\n    dkim=pass (internal/local);\r\n    dmarc=pass header.from={};\r\n    ip-reputation=clean;\r\n    ip-rev=pass (client-ip={})\r\n",
+                hostname, self.sender_envelope, self.from_domain, client_ip_str
+            ));
         } else {
-            ";\r\n    ip-reputation=clean".to_string()
-        };
+            let dmarc_field = match &self.dmarc_policy {
+                Some(p) => match self.dmarc_result {
+                    DmarcResult::Pass => format!(";\r\n    dmarc=pass (p={}) header.from={}", p, self.from_domain),
+                    DmarcResult::Fail => format!(";\r\n    dmarc=fail (p={}) header.from={}", p, self.from_domain),
+                    DmarcResult::None => format!(";\r\n    dmarc=none header.from={}", self.from_domain),
+                },
+                None => ";\r\n    dmarc=none".to_string(),
+            };
 
-        out.push_str(&format!(
-            "Authentication-Results: {};\r\n    spf={} smtp.mailfrom={}{}{};\r\n    ip-rev=pass (client-ip={})\r\n",
-            hostname, self.spf_result, self.sender_envelope, dmarc_field, dnsbl_field, client_ip_str
-        ));
+            let dnsbl_field = if !self.dnsbl_hits.is_empty() {
+                let lists = self
+                    .dnsbl_hits
+                    .iter()
+                    .map(|h| h.list.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(";\r\n    ip-reputation=listed (dnsbl={})", lists)
+            } else {
+                ";\r\n    ip-reputation=clean".to_string()
+            };
+
+            let dkim_field = if self.spf_result == SpfResult::Pass {
+                ";\r\n    dkim=pass"
+            } else {
+                ""
+            };
+
+            out.push_str(&format!(
+                "Authentication-Results: {};\r\n    spf={} smtp.mailfrom={}{}{}{};\r\n    ip-rev=pass (client-ip={})\r\n",
+                hostname, self.spf_result, self.sender_envelope, dkim_field, dmarc_field, dnsbl_field, client_ip_str
+            ));
+        }
 
         out.into_bytes()
     }
@@ -143,6 +179,7 @@ impl SpamDetector {
         client_ip: Option<IpAddr>,
         sender_envelope: &str,
         from_header: &str,
+        is_authenticated_or_local: bool,
     ) -> SpamReport {
         let mut score = 0.0;
         let mut reasons = Vec::new();
@@ -167,6 +204,30 @@ impl SpamDetector {
             .trim()
             .trim_end_matches('>')
             .to_lowercase();
+
+        let check_dmarc_domain = if !from_domain.is_empty() {
+            &from_domain
+        } else {
+            &sender_domain
+        };
+
+        // Authenticated or trusted internal intra-domain deliveries are exempt from external SPF/DMARC penalties
+        if is_authenticated_or_local {
+            info!("Bypassing inbound SPF/DMARC evaluation for authenticated/internal mail from <{}>", clean_sender);
+            return SpamReport {
+                is_spam: false,
+                score: 0.0,
+                dnsbl_hits: Vec::new(),
+                spf_result: SpfResult::Pass,
+                dmarc_result: DmarcResult::Pass,
+                dmarc_policy: None,
+                reasons: vec!["Authenticated internal delivery".to_string()],
+                client_ip: client_ip.or(Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)))),
+                sender_envelope: clean_sender,
+                from_domain: check_dmarc_domain.to_string(),
+                is_internal_or_authenticated: true,
+            };
+        }
 
         let normalized_ip = client_ip.map(|ip| match ip {
             IpAddr::V6(v6) => {
@@ -226,20 +287,18 @@ impl SpamDetector {
         }
 
         // 3. Inbound DMARC Policy Validation
-        let check_dmarc_domain = if !from_domain.is_empty() {
-            &from_domain
-        } else {
-            &sender_domain
-        };
-
         let dmarc_policy = if !check_dmarc_domain.is_empty() && check_dmarc_domain != "localhost" {
             self.check_dmarc(check_dmarc_domain).await
         } else {
             None
         };
 
+        let mut dmarc_result = DmarcResult::None;
         if let Some(ref pol) = dmarc_policy {
-            if spf_result == SpfResult::Fail {
+            if spf_result == SpfResult::Pass {
+                dmarc_result = DmarcResult::Pass;
+            } else if spf_result == SpfResult::Fail {
+                dmarc_result = DmarcResult::Fail;
                 match pol {
                     DmarcPolicy::Reject => {
                         score += 8.0;
@@ -279,11 +338,13 @@ impl SpamDetector {
             score,
             dnsbl_hits,
             spf_result,
+            dmarc_result,
             dmarc_policy,
             reasons,
             client_ip: normalized_ip,
             sender_envelope: clean_sender,
             from_domain: check_dmarc_domain.to_string(),
+            is_internal_or_authenticated: false,
         }
     }
 
@@ -518,7 +579,7 @@ impl SpamDetector {
     }
 }
 
-fn is_private_or_loopback(ip: &IpAddr) -> bool {
+pub fn is_private_or_loopback(ip: &IpAddr) -> bool {
     match ip {
         IpAddr::V4(ipv4) => {
             ipv4.is_loopback() || ipv4.is_private() || ipv4.is_link_local()
