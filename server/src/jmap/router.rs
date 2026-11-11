@@ -31,6 +31,8 @@ pub struct AppState {
     pub event_bus: EventBus,
     pub default_admin_email: String,
     pub jwt_secret: String,
+    pub mail_domain: String,
+    pub hostname: String,
 }
 
 #[derive(Deserialize)]
@@ -48,6 +50,10 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(get_healthz))
         .route("/.well-known/mta-sts.txt", get(get_mta_sts))
+        .route("/.well-known/autoconfig/mail/config-v1.1.xml", get(get_autoconfig_xml))
+        .route("/mail/config-v1.1.xml", get(get_autoconfig_xml))
+        .route("/autodiscover/autodiscover.xml", get(get_or_post_autodiscover_xml).post(get_or_post_autodiscover_xml))
+        .route("/Autodiscover/Autodiscover.xml", get(get_or_post_autodiscover_xml).post(get_or_post_autodiscover_xml))
         .route("/api/auth/login", post(post_auth_login))
         .route("/.well-known/jmap", get(get_session))
         .route("/api/jmap", post(post_jmap))
@@ -291,4 +297,121 @@ async fn get_mta_sts(State(state): State<AppState>) -> Response {
     let mut headers = HeaderMap::new();
     headers.insert(header::CONTENT_TYPE, "text/plain; charset=utf-8".parse().unwrap());
     (StatusCode::OK, headers, content).into_response()
+}
+
+#[derive(Deserialize)]
+struct AutoconfigQuery {
+    emailaddress: Option<String>,
+}
+
+async fn get_autoconfig_xml(
+    Query(query): Query<AutoconfigQuery>,
+    State(state): State<AppState>,
+) -> Response {
+    let domain = query
+        .emailaddress
+        .as_deref()
+        .and_then(|e| e.split('@').nth(1))
+        .unwrap_or(&state.mail_domain);
+    let hostname = &state.hostname;
+
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<clientConfig version="1.1">
+  <emailProvider id="{domain}">
+    <domain>{domain}</domain>
+    <displayName>{domain} Mail</displayName>
+    <displayShortName>{domain}</displayShortName>
+    <incomingServer type="imap">
+      <hostname>{hostname}</hostname>
+      <port>993</port>
+      <socketType>SSL</socketType>
+      <authentication>password-cleartext</authentication>
+      <username>%EMAILADDRESS%</username>
+    </incomingServer>
+    <incomingServer type="imap">
+      <hostname>{hostname}</hostname>
+      <port>143</port>
+      <socketType>STARTTLS</socketType>
+      <authentication>password-cleartext</authentication>
+      <username>%EMAILADDRESS%</username>
+    </incomingServer>
+    <outgoingServer type="smtp">
+      <hostname>{hostname}</hostname>
+      <port>465</port>
+      <socketType>SSL</socketType>
+      <authentication>password-cleartext</authentication>
+      <username>%EMAILADDRESS%</username>
+    </outgoingServer>
+    <outgoingServer type="smtp">
+      <hostname>{hostname}</hostname>
+      <port>587</port>
+      <socketType>STARTTLS</socketType>
+      <authentication>password-cleartext</authentication>
+      <username>%EMAILADDRESS%</username>
+    </outgoingServer>
+  </emailProvider>
+</clientConfig>"#
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "application/xml; charset=utf-8".parse().unwrap());
+    (StatusCode::OK, headers, xml).into_response()
+}
+
+async fn get_or_post_autodiscover_xml(
+    State(state): State<AppState>,
+    body: Bytes,
+) -> Response {
+    let email_or_placeholder = if !body.is_empty() {
+        let text = String::from_utf8_lossy(&body);
+        if let Some(start) = text.find("<EMailAddress>") {
+            if let Some(end) = text[start..].find("</EMailAddress>") {
+                text[start + 14..start + end].trim().to_string()
+            } else {
+                "%EMAILADDRESS%".to_string()
+            }
+        } else {
+            "%EMAILADDRESS%".to_string()
+        }
+    } else {
+        "%EMAILADDRESS%".to_string()
+    };
+
+    let hostname = &state.hostname;
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006">
+  <Response xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a">
+    <Account>
+      <AccountType>email</AccountType>
+      <Action>settings</Action>
+      <Protocol>
+        <Type>IMAP</Type>
+        <Server>{hostname}</Server>
+        <Port>993</Port>
+        <DomainRequired>off</DomainRequired>
+        <LoginName>{email_or_placeholder}</LoginName>
+        <SPA>off</SPA>
+        <SSL>on</SSL>
+        <AuthRequired>on</AuthRequired>
+      </Protocol>
+      <Protocol>
+        <Type>SMTP</Type>
+        <Server>{hostname}</Server>
+        <Port>465</Port>
+        <DomainRequired>off</DomainRequired>
+        <LoginName>{email_or_placeholder}</LoginName>
+        <SPA>off</SPA>
+        <SSL>on</SSL>
+        <AuthRequired>on</AuthRequired>
+      </Protocol>
+    </Account>
+  </Response>
+</Autodiscover>"#
+    );
+
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "application/xml; charset=utf-8".parse().unwrap());
+    (StatusCode::OK, headers, xml).into_response()
 }

@@ -88,6 +88,67 @@ In your VPS hosting provider console (Hetzner, DigitalOcean, Vultr, Linode, AWS)
 
 ---
 
+## Interactive Management Dashboard (`postarc`)
+
+Postarc includes an **interactive terminal dashboard**. Simply run `postarc` with no arguments from any folder:
+
+```bash
+postarc
+```
+
+```text
+  ██████╗  ██████╗ ███████╗████████╗ █████╗ ██████╗  ██████╗ 
+  ██╔══██╗██╔═══██╗██╔════╝╚══██╔══╝██╔══██╗██╔══██╗██╔════╝ 
+  ██████╔╝██║   ██║███████╗   ██║   ███████║██████╔╝██║      
+  ██╔═══╝ ██║   ██║╚════██║   ██║   ██╔══██║██╔══██╗██║      
+  ██║     ╚██████╔╝███████║   ██║   ██║  ██║██║  ██║╚██████╗ 
+  ╚═╝      ╚═════╝ ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝ ╚═════╝ 
+  Postarc Mailserver - Enterprise Production Engine & Management CLI
+
+Server Status: Running ✓ | Domain: yourdomain.com | Host: mail.yourdomain.com | SSL: Let's Encrypt Active ✓
+--------------------------------------------------------------------------------
+  1) System Doctor & Live DNS Check
+  2) Mail Client Connection Cheat Sheet (Thunderbird / iOS / Outlook)
+  3) Add New Email Account
+  4) List All Accounts & Storage Quotas
+  5) Reset Account Password
+  6) Delete Email Account
+  7) Manage Hosted Domains (Add / List / Remove)
+  8) Manage Aliases & Catch-Alls (Add / List / Remove)
+  9) View / Export DKIM DNS Keys
+ 10) Request / Renew Let's Encrypt SSL Certificate
+ 11) View Live Mail Daemon Logs
+ 12) Restart Mailserver Services
+ 13) Update Postarc (Git Pull & Zero-Downtime Rebuild)
+  0) Exit to Shell
+--------------------------------------------------------------------------------
+Select an option [0-13]:
+```
+
+> [!TIP]
+> **Zero-Friction Administration**: You do not need to memorize commands or flags. Just type `postarc` and press `3` to add an email account, `4` to list mailboxes, or `1` to run live DNS checks!
+
+---
+
+## Client Auto-Discovery (Zero-Configuration Setup)
+
+Postarc automatically serves **Mozilla Autoconfig** and **Microsoft Outlook Autodiscover** XML standards directly from the server.
+
+When configuring **Thunderbird**, **Apple Mail / iOS Mail**, **Android**, or **Microsoft Outlook**:
+1. Simply enter your full email address (e.g. `user@yourdomain.com`) and password.
+2. The mail client automatically queries Postarc's auto-discovery endpoints:
+   - `http://mail.yourdomain.com:8080/.well-known/autoconfig/mail/config-v1.1.xml` (Mozilla Thunderbird / Android)
+   - `http://mail.yourdomain.com:8080/autodiscover/autodiscover.xml` (Microsoft Outlook / Apple Mail)
+3. The client automatically configures **Port 993 (IMAPS with SSL)** and **Port 465 (SMTPS with SSL)** with zero manual port configuration!
+
+### Instant Connection Cheat Sheet
+Display connection parameters directly in your terminal at any time:
+```bash
+postarc info
+```
+
+---
+
 ## Postarc Management CLI Reference (`postarc`)
 
 Postarc includes a native host management CLI. You can run `postarc` directly from any folder in your terminal:

@@ -138,6 +138,8 @@ async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
             event_bus: event_bus.clone(),
             default_admin_email: config.admin_email.clone(),
             jwt_secret: config.jwt_secret.clone(),
+            mail_domain: config.mail_domain.clone(),
+            hostname: config.hostname.clone(),
         };
 
         let jmap_bind_addr = config.jmap_bind_addr;

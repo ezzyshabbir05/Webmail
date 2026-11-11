@@ -61,6 +61,11 @@ print_usage() {
     print_banner
     echo -e "${BOLD}Usage:${NC} postarc [COMMAND] [OPTIONS]"
     echo ""
+    echo -e "${BOLD}Interactive Dashboard:${NC}"
+    echo "  (no arguments)           Launch interactive colored management dashboard"
+    echo "  menu                     Launch interactive colored management dashboard"
+    echo "  info                     Display mail client connection cheat sheet & autoconfig URLs"
+    echo ""
     echo -e "${BOLD}Core Commands:${NC}"
     echo "  setup                    Run interactive turnkey production setup wizard"
     echo "  doctor [DOMAIN]          Run system diagnostics and verify live DNS records"
@@ -152,6 +157,45 @@ install_host_symlink() {
     fi
 }
 
+check_port_conflicts() {
+    if command -v ss &> /dev/null; then
+        echo -e "${CYAN}Checking for host port conflicts...${NC}"
+        for port in 25 80 443 143 465 587 993; do
+            if ss -tlpn 2>/dev/null | grep -q ":${port} "; then
+                local line
+                line=$(ss -tlpn 2>/dev/null | grep ":${port} " | head -n1)
+                # If bound by docker, ignore
+                if [[ "${line}" != *"docker"* ]]; then
+                    if echo "${line}" | grep -qi "postfix"; then
+                        echo -e "${YELLOW}Notice: Host service 'postfix' is occupying port ${port}.${NC}"
+                        read -rp "Stop and disable host postfix to let Postarc bind port ${port}? (Y/n): " FIX_CONF
+                        FIX_CONF="${FIX_CONF:-Y}"
+                        if [[ "${FIX_CONF}" =~ ^[Yy]$ ]]; then
+                            systemctl stop postfix || true
+                            systemctl disable postfix || true
+                            echo -e "${GREEN}Host postfix disabled.${NC}"
+                        fi
+                    elif echo "${line}" | grep -qi "exim"; then
+                        echo -e "${YELLOW}Notice: Host service 'exim' is occupying port ${port}.${NC}"
+                        read -rp "Stop and disable host exim to let Postarc bind port ${port}? (Y/n): " FIX_CONF
+                        FIX_CONF="${FIX_CONF:-Y}"
+                        if [[ "${FIX_CONF}" =~ ^[Yy]$ ]]; then
+                            systemctl stop exim4 || true
+                            systemctl disable exim4 || true
+                            echo -e "${GREEN}Host exim disabled.${NC}"
+                        fi
+                    elif echo "${line}" | grep -qiE "(apache|nginx)"; then
+                        local web_srv
+                        web_srv=$(echo "${line}" | grep -o -E "apache2|nginx|httpd" | head -n1 || echo "web server")
+                        echo -e "${YELLOW}Notice: Host ${web_srv} is listening on port ${port}.${NC}"
+                        echo -e "${YELLOW}Note: If using Certbot standalone for SSL, port 80 must be momentarily free.${NC}"
+                    fi
+                fi
+            fi
+        done
+    fi
+}
+
 run_setup_wizard() {
     print_banner
     echo -e "${BOLD}${CYAN}=== Postarc Turnkey Production Setup Wizard ===${NC}"
@@ -167,6 +211,7 @@ run_setup_wizard() {
         elif command -v yum &> /dev/null; then
             yum install -y curl openssl certbot bind-utils || true
         fi
+        check_port_conflicts
     fi
 
     # 2. Existing configuration detection
@@ -449,6 +494,258 @@ manage_cert() {
     esac
 }
 
+print_client_info() {
+    local domain="example.com"
+    local host_name="mail.example.com"
+    local admin_em="admin@example.com"
+
+    if [ -f .env ]; then
+        domain=$(grep "^MAIL_DOMAIN=" .env 2>/dev/null | cut -d '=' -f2- | tr -d '\r' || echo "$domain")
+        host_name=$(grep "^MAIL_HOSTNAME=" .env 2>/dev/null | cut -d '=' -f2- | tr -d '\r' || echo "$host_name")
+        admin_em=$(grep "^ADMIN_EMAIL=" .env 2>/dev/null | cut -d '=' -f2- | tr -d '\r' || echo "$admin_em")
+    fi
+
+    echo -e "${BOLD}${CYAN}==============================================================================${NC}"
+    echo -e "${BOLD}${CYAN}             POSTARC MAIL CLIENT CONNECTION CHEAT SHEET                       ${NC}"
+    echo -e "${BOLD}${CYAN}==============================================================================${NC}"
+    echo -e "Use these settings in ${BOLD}Thunderbird, Apple Mail, iOS, Outlook, Android${NC}, or any mail client:"
+    echo ""
+    echo -e "${BOLD}ACCOUNT CREDENTIALS:${NC}"
+    echo -e "  • Username:          ${GREEN}Your FULL email address${NC} (e.g. ${admin_em})"
+    echo -e "  • Password:          ${GREEN}Your account password${NC}"
+    echo -e "  • Authentication:    ${GREEN}Normal password / PLAIN${NC}"
+    echo ""
+    echo -e "${BOLD}INCOMING MAIL (IMAP):${NC}"
+    echo -e "  • Server Hostname:   ${BOLD}${host_name}${NC}"
+    echo -e "  • Recommended Port:  ${BOLD}993${NC} (SSL/TLS / Implicit TLS)"
+    echo -e "  • Alternative Port:  ${BOLD}143${NC} (STARTTLS)"
+    echo ""
+    echo -e "${BOLD}OUTGOING MAIL (SMTP):${NC}"
+    echo -e "  • Server Hostname:   ${BOLD}${host_name}${NC}"
+    echo -e "  • Recommended Port:  ${BOLD}465${NC} (SSL/TLS / Implicit TLS)"
+    echo -e "  • Alternative Port:  ${BOLD}587${NC} (STARTTLS / Submission)"
+    echo -e "  • Authentication:    ${BOLD}Required${NC} (Same full email address & password)"
+    echo ""
+    echo -e "${BOLD}AUTOMATIC CONFIGURATION (Zero-Click Auto-Discovery):${NC}"
+    echo -e "  • Mozilla Autoconfig: http://${host_name}:8080/.well-known/autoconfig/mail/config-v1.1.xml"
+    echo -e "  • Outlook Discover:   http://${host_name}:8080/autodiscover/autodiscover.xml"
+    echo -e "  • Webmail / JMAP:     http://${host_name}:8080"
+    echo -e "${BOLD}${CYAN}==============================================================================${NC}"
+}
+
+run_interactive_menu() {
+    ensure_docker
+    sync_db_password
+
+    local domain="Not configured"
+    local host_name="localhost"
+    if [ -f .env ]; then
+        domain=$(grep "^MAIL_DOMAIN=" .env 2>/dev/null | cut -d '=' -f2- | tr -d '\r' || echo "$domain")
+        host_name=$(grep "^MAIL_HOSTNAME=" .env 2>/dev/null | cut -d '=' -f2- | tr -d '\r' || echo "$host_name")
+    fi
+
+    while true; do
+        clear 2>/dev/null || true
+        print_banner
+
+        # Determine container status
+        local status_str="${RED}Stopped ✗${NC}"
+        if ${COMPOSE_CMD} -f "${COMPOSE_FILE}" ps --status running 2>/dev/null | grep -q "postarc"; then
+            status_str="${GREEN}Running ✓${NC}"
+        fi
+
+        # Determine TLS status
+        local tls_str="${YELLOW}Self-signed / Fallback${NC}"
+        if [ -f "/etc/letsencrypt/live/${host_name}/fullchain.pem" ]; then
+            tls_str="${GREEN}Let's Encrypt Active ✓${NC}"
+        fi
+
+        echo -e "${BOLD}Server Status:${NC} ${status_str} | ${BOLD}Domain:${NC} ${CYAN}${domain}${NC} | ${BOLD}Host:${NC} ${CYAN}${host_name}${NC} | ${BOLD}SSL:${NC} ${tls_str}"
+        echo -e "--------------------------------------------------------------------------------"
+        echo -e "  ${BOLD}1)${NC} System Doctor & Live DNS Check"
+        echo -e "  ${BOLD}2)${NC} Mail Client Connection Cheat Sheet (Thunderbird / iOS / Outlook)"
+        echo -e "  ${BOLD}3)${NC} Add New Email Account"
+        echo -e "  ${BOLD}4)${NC} List All Accounts & Storage Quotas"
+        echo -e "  ${BOLD}5)${NC} Reset Account Password"
+        echo -e "  ${BOLD}6)${NC} Delete Email Account"
+        echo -e "  ${BOLD}7)${NC} Manage Hosted Domains (Add / List / Remove)"
+        echo -e "  ${BOLD}8)${NC} Manage Aliases & Catch-Alls (Add / List / Remove)"
+        echo -e "  ${BOLD}9)${NC} View / Export DKIM DNS Keys"
+        echo -e " ${BOLD}10)${NC} Request / Renew Let's Encrypt SSL Certificate"
+        echo -e " ${BOLD}11)${NC} View Live Mail Daemon Logs"
+        echo -e " ${BOLD}12)${NC} Restart Mailserver Services"
+        echo -e " ${BOLD}13)${NC} Update Postarc (Git Pull & Zero-Downtime Rebuild)"
+        echo -e "  ${BOLD}0)${NC} Exit to Shell"
+        echo -e "--------------------------------------------------------------------------------"
+        read -rp "Select an option [0-13]: " MENU_CHOICE
+
+        case "${MENU_CHOICE}" in
+            1)
+                echo ""
+                run_container_cli doctor "${domain}"
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
+            2)
+                echo ""
+                print_client_info
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
+            3)
+                echo ""
+                echo -e "${BOLD}${CYAN}=== Add New Email Account ===${NC}"
+                read -rp "Enter email address (e.g. user@${domain}): " NEW_EMAIL
+                if [ -n "${NEW_EMAIL}" ]; then
+                    read -rp "Enter password (leave empty to generate secure random password): " NEW_PASS
+                    if [ -z "${NEW_PASS}" ]; then
+                        NEW_PASS=$(openssl rand -base64 16 | tr -dc 'a-zA-Z0-9!@#$' | head -c 14)
+                        echo -e "Generated Password: ${BOLD}${GREEN}${NEW_PASS}${NC}"
+                    fi
+                    read -rp "Enter mailbox quota in GB [50]: " NEW_QUOTA
+                    NEW_QUOTA="${NEW_QUOTA:-50}"
+                    run_container_cli user add "${NEW_EMAIL}" --password "${NEW_PASS}" --quota-gb "${NEW_QUOTA}"
+                fi
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
+            4)
+                echo ""
+                run_container_cli user list
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
+            5)
+                echo ""
+                echo -e "${BOLD}${CYAN}=== Reset Account Password ===${NC}"
+                read -rp "Enter account email: " RESET_EMAIL
+                if [ -n "${RESET_EMAIL}" ]; then
+                    run_container_cli user password "${RESET_EMAIL}"
+                fi
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
+            6)
+                echo ""
+                echo -e "${BOLD}${CYAN}=== Delete Email Account ===${NC}"
+                read -rp "Enter email to delete: " DEL_EMAIL
+                if [ -n "${DEL_EMAIL}" ]; then
+                    read -rp "Are you sure you want to delete '${DEL_EMAIL}'? (y/N): " CONFIRM
+                    if [[ "${CONFIRM}" =~ ^[Yy]$ ]]; then
+                        run_container_cli user delete "${DEL_EMAIL}"
+                    fi
+                fi
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
+            7)
+                echo ""
+                echo -e "${BOLD}${CYAN}=== Manage Hosted Domains ===${NC}"
+                echo "1) List hosted domains"
+                echo "2) Add a new hosted domain"
+                echo "3) Remove a hosted domain"
+                read -rp "Select option [1]: " DOM_OPT
+                DOM_OPT="${DOM_OPT:-1}"
+                if [ "${DOM_OPT}" = "1" ]; then
+                    run_container_cli domain list
+                elif [ "${DOM_OPT}" = "2" ]; then
+                    read -rp "Enter domain name to add (e.g. otherdomain.com): " NEW_DOM
+                    [ -n "${NEW_DOM}" ] && run_container_cli domain add "${NEW_DOM}"
+                elif [ "${DOM_OPT}" = "3" ]; then
+                    read -rp "Enter domain name to remove: " REM_DOM
+                    [ -n "${REM_DOM}" ] && run_container_cli domain remove "${REM_DOM}"
+                fi
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
+            8)
+                echo ""
+                echo -e "${BOLD}${CYAN}=== Manage Aliases & Catch-Alls ===${NC}"
+                echo "1) List virtual aliases"
+                echo "2) Add an alias or catch-all (e.g. 'contact@${domain}' -> 'user@${domain}')"
+                echo "3) Remove an alias"
+                read -rp "Select option [1]: " ALIAS_OPT
+                ALIAS_OPT="${ALIAS_OPT:-1}"
+                if [ "${ALIAS_OPT}" = "1" ]; then
+                    run_container_cli alias list
+                elif [ "${ALIAS_OPT}" = "2" ]; then
+                    read -rp "Enter source address (e.g. info@${domain} or @${domain} for catch-all): " SRC_ALIAS
+                    read -rp "Enter destination account email: " DST_ALIAS
+                    if [ -n "${SRC_ALIAS}" ] && [ -n "${DST_ALIAS}" ]; then
+                        run_container_cli alias add "${SRC_ALIAS}" "${DST_ALIAS}"
+                    fi
+                elif [ "${ALIAS_OPT}" = "3" ]; then
+                    read -rp "Enter source address to remove: " REM_ALIAS
+                    [ -n "${REM_ALIAS}" ] && run_container_cli alias remove "${REM_ALIAS}"
+                fi
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
+            9)
+                echo ""
+                echo -e "${BOLD}${CYAN}=== View / Export DKIM Keys ===${NC}"
+                read -rp "Enter domain [${domain}]: " DKIM_DOM
+                DKIM_DOM="${DKIM_DOM:-$domain}"
+                read -rp "Enter DKIM selector [mail]: " DKIM_SEL
+                DKIM_SEL="${DKIM_SEL:-mail}"
+                run_container_cli dkim export "${DKIM_DOM}" --selector "${DKIM_SEL}"
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
+            10)
+                echo ""
+                echo -e "${BOLD}${CYAN}=== SSL/TLS Certificate Management ===${NC}"
+                echo "1) Show certificate status & expiration"
+                echo "2) Request / Renew Let's Encrypt certificate"
+                read -rp "Select option [1]: " CERT_OPT
+                CERT_OPT="${CERT_OPT:-1}"
+                if [ "${CERT_OPT}" = "1" ]; then
+                    manage_cert status "${host_name}"
+                else
+                    manage_cert request "${host_name}"
+                fi
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
+            11)
+                echo -e "${CYAN}Streaming live logs (Press Ctrl+C to return to menu)...${NC}"
+                ${COMPOSE_CMD} -f "${COMPOSE_FILE}" logs -f --tail=100 postarc || true
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
+            12)
+                echo -e "${CYAN}Restarting Postarc services...${NC}"
+                ${COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d --force-recreate
+                sleep 2
+                sync_db_password
+                echo -e "${GREEN}Services restarted successfully.${NC}"
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
+            13)
+                echo -e "${CYAN}Updating Postarc from Git repository...${NC}"
+                git pull origin main
+                echo -e "${CYAN}Rebuilding image...${NC}"
+                ${COMPOSE_CMD} -f "${COMPOSE_FILE}" build
+                echo -e "${CYAN}Reloading services...${NC}"
+                ${COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d
+                install_host_symlink
+                echo -e "${GREEN}Postarc is updated and running the latest release!${NC}"
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
+            0|q|exit)
+                echo -e "${GREEN}Goodbye!${NC}"
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}Invalid option.${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
 # ==============================================================================
 # CLI Entry Point & Subcommand Dispatcher
 # ==============================================================================
@@ -458,6 +755,8 @@ CMD="${1:-}"
 if [ -z "${CMD}" ]; then
     if [ ! -f .env ]; then
         run_setup_wizard
+    elif [ -t 0 ]; then
+        run_interactive_menu
     else
         print_usage
     fi
@@ -469,6 +768,12 @@ shift || true
 case "${CMD}" in
     setup)
         run_setup_wizard
+        ;;
+    menu)
+        run_interactive_menu
+        ;;
+    info)
+        print_client_info
         ;;
     doctor)
         run_container_cli doctor "$@"
