@@ -5,9 +5,10 @@ use crate::smtp::inbound::process_inbound_mail;
 use crate::storage::BlobStorage;
 use hickory_resolver::config::{ResolverConfig, ResolverOpts};
 use hickory_resolver::TokioAsyncResolver;
+use rustls_pki_types::ServerName;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tracing::{error, info, warn};
@@ -159,7 +160,7 @@ pub fn spawn_outbound_queue_worker(
 
                         match timeout(
                             Duration::from_secs(20),
-                            deliver_via_smtp(&target_addr, &hostname, &sender, &clean_rcpt, &dkim_signed_payload),
+                            deliver_via_smtp(&target_addr, mx, &hostname, &sender, &clean_rcpt, &dkim_signed_payload),
                         )
                         .await
                         {
@@ -221,25 +222,31 @@ pub fn spawn_outbound_queue_worker(
 
 async fn deliver_via_smtp(
     addr: &str,
+    mx_host: &str,
     hostname: &str,
     sender: &str,
     recipient: &str,
     payload: &[u8],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let stream = TcpStream::connect(addr).await?;
-    let (reader, mut writer) = stream.into_split();
-    let mut lines = BufReader::new(reader).lines();
+    let mut reader = BufReader::new(stream);
 
     // 1. Expect 220 banner
-    let greeting = lines.next_line().await?.unwrap_or_default();
+    let mut greeting = String::new();
+    reader.read_line(&mut greeting).await?;
     if !greeting.starts_with("220") {
         return Err(format!("Bad greeting from server: {}", greeting).into());
     }
 
     // 2. Send EHLO
-    writer.write_all(format!("EHLO {}\r\n", hostname).as_bytes()).await?;
+    reader.get_mut().write_all(format!("EHLO {}\r\n", hostname).as_bytes()).await?;
+    let mut supports_starttls = false;
     loop {
-        let line = lines.next_line().await?.unwrap_or_default();
+        let mut line = String::new();
+        reader.read_line(&mut line).await?;
+        if line.to_uppercase().contains("STARTTLS") {
+            supports_starttls = true;
+        }
         if line.starts_with("250 ") {
             break;
         } else if !line.starts_with("250-") {
@@ -247,42 +254,103 @@ async fn deliver_via_smtp(
         }
     }
 
-    // 3. Send MAIL FROM
+    // 3. Attempt opportunistic STARTTLS upgrade if supported
+    if supports_starttls {
+        reader.get_mut().write_all(b"STARTTLS\r\n").await?;
+        let mut starttls_resp = String::new();
+        reader.read_line(&mut starttls_resp).await?;
+
+        if starttls_resp.starts_with("220") {
+            let stream = reader.into_inner();
+            let connector = crate::tls::build_outbound_tls_connector();
+            if let Ok(dns_name) = ServerName::try_from(mx_host.to_string()) {
+                match connector.connect(dns_name.to_owned(), stream).await {
+                    Ok(tls_stream) => {
+                        info!("Upgraded outbound SMTP connection to {} via STARTTLS (TLS active)", mx_host);
+                        let (r, mut w) = tokio::io::split(tls_stream);
+                        let mut tls_reader = BufReader::new(r);
+
+                        // Re-send EHLO after TLS handshake per RFC 3207
+                        w.write_all(format!("EHLO {}\r\n", hostname).as_bytes()).await?;
+                        loop {
+                            let mut line = String::new();
+                            tls_reader.read_line(&mut line).await?;
+                            if line.starts_with("250 ") {
+                                break;
+                            } else if !line.starts_with("250-") {
+                                return Err(format!("EHLO over TLS failed: {}", line).into());
+                            }
+                        }
+
+                        return finish_smtp_dialogue(&mut tls_reader, &mut w, sender, recipient, payload).await;
+                    }
+                    Err(e) => {
+                        warn!("STARTTLS handshake with {} failed: {}. Aborting connection.", mx_host, e);
+                        return Err(format!("TLS handshake failed: {}", e).into());
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: Continue over plaintext if remote server does not advertise or accept STARTTLS
+    let stream = reader.into_inner();
+    let (r, mut w) = tokio::io::split(stream);
+    let mut plain_reader = BufReader::new(r);
+    finish_smtp_dialogue(&mut plain_reader, &mut w, sender, recipient, payload).await
+}
+
+async fn finish_smtp_dialogue<R, W>(
+    reader: &mut BufReader<R>,
+    writer: &mut W,
+    sender: &str,
+    recipient: &str,
+    payload: &[u8],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    // 1. Send MAIL FROM
     let clean_sender = sender.trim().trim_start_matches('<').trim_end_matches('>');
     writer.write_all(format!("MAIL FROM:<{}>\r\n", clean_sender).as_bytes()).await?;
-    let resp = lines.next_line().await?.unwrap_or_default();
+    let mut resp = String::new();
+    reader.read_line(&mut resp).await?;
     if !resp.starts_with("250") {
         return Err(format!("MAIL FROM rejected: {}", resp).into());
     }
 
-    // 4. Send RCPT TO
+    // 2. Send RCPT TO
     let clean_rcpt = recipient.trim().trim_start_matches('<').trim_end_matches('>');
     writer.write_all(format!("RCPT TO:<{}>\r\n", clean_rcpt).as_bytes()).await?;
-    let resp = lines.next_line().await?.unwrap_or_default();
+    let mut resp = String::new();
+    reader.read_line(&mut resp).await?;
     if !resp.starts_with("250") {
         return Err(format!("RCPT TO rejected: {}", resp).into());
     }
 
-    // 5. Send DATA
+    // 3. Send DATA
     writer.write_all(b"DATA\r\n").await?;
-    let resp = lines.next_line().await?.unwrap_or_default();
+    let mut resp = String::new();
+    reader.read_line(&mut resp).await?;
     if !resp.starts_with("354") {
         return Err(format!("DATA initiation rejected: {}", resp).into());
     }
 
-    // 6. Transmit Payload + <CRLF>.<CRLF>
+    // 4. Transmit Payload + <CRLF>.<CRLF>
     writer.write_all(payload).await?;
     if !payload.ends_with(b"\r\n") {
         writer.write_all(b"\r\n").await?;
     }
     writer.write_all(b".\r\n").await?;
 
-    let resp = lines.next_line().await?.unwrap_or_default();
+    let mut resp = String::new();
+    reader.read_line(&mut resp).await?;
     if !resp.starts_with("250") {
         return Err(format!("DATA delivery rejected: {}", resp).into());
     }
 
-    // 7. QUIT
+    // 5. QUIT
     let _ = writer.write_all(b"QUIT\r\n").await;
     Ok(())
 }

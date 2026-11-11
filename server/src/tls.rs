@@ -1,8 +1,8 @@
 use rustls_pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use std::path::Path;
 use std::sync::Arc;
-use tokio_rustls::rustls::ServerConfig;
-use tokio_rustls::TlsAcceptor;
+use tokio_rustls::rustls::{ClientConfig, RootCertStore, ServerConfig};
+use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tracing::{info, warn};
 
 pub fn build_tls_acceptor(hostname: &str) -> Option<TlsAcceptor> {
@@ -75,4 +75,12 @@ pub fn build_tls_acceptor(hostname: &str) -> Option<TlsAcceptor> {
 
     info!("Initialized fallback self-signed TLS acceptor for {}", hostname);
     Some(TlsAcceptor::from(Arc::new(config)))
+}
+
+pub fn build_outbound_tls_connector() -> TlsConnector {
+    let root_store = RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    let config = ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    TlsConnector::from(Arc::new(config))
 }
