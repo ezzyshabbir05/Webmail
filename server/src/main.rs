@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod db;
 mod event_bus;
+mod imap;
 mod jmap;
 mod smtp;
 mod storage;
@@ -79,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(repo) = repo_opt {
         info!("Core database subsystem active and ready.");
 
-        // Start JMAP & HTTP server
+        // 1. Start JMAP & HTTP server (Port 8080)
         let app_state = jmap::AppState {
             repo: repo.clone(),
             storage: storage.clone(),
@@ -94,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
-        // Start SMTP Inbound MTA (Port 25)
+        // 2. Start SMTP Inbound MTA (Port 25)
         let smtp_addr = config.smtp_bind_addr;
         let smtp_repo = repo.clone();
         let smtp_storage = storage.clone();
@@ -115,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
-        // Start SMTP Submission (Port 587)
+        // 3. Start SMTP Submission (Port 587)
         let sub_addr = config.submission_bind_addr;
         let sub_repo = repo.clone();
         let sub_storage = storage.clone();
@@ -133,6 +134,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await
             {
                 error!("SMTP Submission Port 587 listener terminated with error: {}", e);
+            }
+        });
+
+        // 4. Start IMAP4rev2 Server (Port 993)
+        let imap_addr = config.imaps_bind_addr;
+        let imap_repo = repo.clone();
+        let imap_storage = storage.clone();
+        let imap_bus = event_bus.clone();
+        let imap_hostname = config.hostname.clone();
+        tokio::spawn(async move {
+            if let Err(e) = imap::run_imap_listener(
+                imap_addr,
+                imap_repo,
+                imap_storage,
+                imap_bus,
+                imap_hostname,
+            )
+            .await
+            {
+                error!("IMAP4rev2 Port 993 listener terminated with error: {}", e);
             }
         });
     }
