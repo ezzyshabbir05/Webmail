@@ -81,6 +81,7 @@ interface MailContextType {
       mode?: "reply" | "reply_all" | "forward"
       to?: string
       cc?: string[]
+      bcc?: string[]
       attachments?: EmailAttachment[]
     }
   ) => void
@@ -113,6 +114,7 @@ interface MailContextType {
     attachments?: EmailAttachment[],
     identityId?: string
   ) => Promise<void>
+  uploadAttachment: (file: File) => Promise<{ blobId: string; size: number; type: string }>
   saveDraft: (to: string, subject: string, body: string, attachments?: EmailAttachment[]) => void
   setActiveCategory: (category: EmailCategory) => void
   setActiveFolder: (folder: EmailFolder) => void
@@ -249,9 +251,18 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
   const [activeEmailId, setActiveEmailId] = useState<string | null>(null)
   const [activeCategory, setActiveCategory] = useState<EmailCategory>("primary")
   const [activeFolder, setActiveFolder] = useState<EmailFolder>("inbox")
+  const [serverMailboxes, setServerMailboxes] = useState<JmapMailbox[]>([])
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isComposeOpen, setIsComposeOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("")
+
+  useEffect(() => {
+    const handler = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery)
+    }, 300)
+    return () => clearTimeout(handler)
+  }, [searchQuery])
 
   const getInitialIdentity = (): MailIdentity => {
     if (typeof window !== "undefined") {
@@ -352,6 +363,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     try {
       // Fetch Mailboxes
       const mailboxes: JmapMailbox[] = await postarcClient.getMailboxes()
+      setServerMailboxes(mailboxes)
       const roleMap: Record<string, string> = {}
       for (const m of mailboxes) {
         if (m.role) {
@@ -373,7 +385,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
 
       // Fetch Emails
       const { emails: jmapEmails } = await postarcClient.getEmails({
-        searchQuery: searchQuery || undefined,
+        searchQuery: debouncedSearchQuery || undefined,
         limit: 100,
       })
 
@@ -433,7 +445,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       console.error("Failed to refresh mailbox from Postarc:", err)
     }
-  }, [searchQuery])
+  }, [debouncedSearchQuery])
 
   useEffect(() => {
     checkAuth().then((authed) => {
@@ -491,21 +503,36 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
       trash: 0,
     }
 
+    const inboxMb = serverMailboxes.find((m) => m.role === "inbox")
+    const draftsMb = serverMailboxes.find((m) => m.role === "drafts")
+    const spamMb = serverMailboxes.find((m) => m.role === "spam")
+    const trashMb = serverMailboxes.find((m) => m.role === "trash")
+
+    counts.inbox = inboxMb ? inboxMb.unreadEmails : 0
+    counts.drafts = draftsMb ? draftsMb.totalEmails : 0
+    counts.spam = spamMb ? spamMb.unreadEmails : 0
+    counts.trash = trashMb ? trashMb.unreadEmails : 0
+
+    let localInboxUnread = 0
     emails.forEach((email) => {
       if (email.isUnread && email.folder === "inbox") {
-        counts.inbox++
+        localInboxUnread++
         if (email.category in counts) {
           counts[email.category]++
         }
       }
       if (email.isStarred) counts.starred++
-      if (email.folder === "drafts") counts.drafts++
-      if (email.isUnread && email.folder === "spam") counts.spam++
-      if (email.isUnread && email.folder === "trash") counts.trash++
+      if (!draftsMb && email.folder === "drafts") counts.drafts++
+      if (!spamMb && email.isUnread && email.folder === "spam") counts.spam++
+      if (!trashMb && email.isUnread && email.folder === "trash") counts.trash++
     })
 
+    if (counts.inbox === 0 && localInboxUnread > 0) {
+      counts.inbox = localInboxUnread
+    }
+
     return counts
-  }, [emails])
+  }, [emails, serverMailboxes])
 
   const openEmail = (id: string) => {
     setActiveEmailId(id)
@@ -742,6 +769,10 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     if (activeEmailId && ids.includes(activeEmailId)) {
       setActiveEmailId(null)
     }
+    // Audit #9: Persist snooze state to server
+    ids.forEach((id) => {
+      postarcClient.setEmailProperties(id, { mailboxIds: { snoozed: true } }).catch(() => {})
+    })
     toast({ body: `Snoozed until ${untilText}` })
   }
 
@@ -770,6 +801,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
       mode?: "reply" | "reply_all" | "forward"
       to?: string
       cc?: string[]
+      bcc?: string[]
       attachments?: EmailAttachment[]
     }
   ) => {
@@ -777,6 +809,15 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
 
     const targetThread = emails.find((e) => e.id === threadId)
     const recipient = options?.to?.trim() || targetThread?.senderEmail || "recipient@example.com"
+
+    // Audit #13: Compute combined CC list for Reply All
+    let combinedCc = options?.cc || []
+    if (options?.mode === "reply_all" && targetThread) {
+      const origCcs = (targetThread.ccEmails || []).filter(
+        (c) => c && c.toLowerCase() !== activeIdentity.email.toLowerCase() && c.toLowerCase() !== recipient.toLowerCase()
+      )
+      combinedCc = Array.from(new Set([...combinedCc, ...origCcs]))
+    }
 
     const newMessage: ThreadMessage = {
       id: `msg_reply_${Date.now()}`,
@@ -809,7 +850,10 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
         identityId: activeIdentity.id,
         from: { name: activeIdentity.name, email: activeIdentity.email },
         to: [{ email: recipient }],
-        cc: options?.cc?.map((email) => ({ email })),
+        cc: combinedCc.map((email) => ({ email })),
+        bcc: options?.bcc?.map((email) => ({ email })),
+        inReplyTo: targetThread ? [targetThread.id] : undefined,
+        references: targetThread ? [targetThread.id] : undefined,
         subject: targetThread ? `Re: ${targetThread.subject}` : "Reply",
         body: replyText,
       })
@@ -906,6 +950,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     setEmails((prev) =>
       prev.map((e) => (e.folder === targetFolder ? { ...e, isUnread: false } : e))
     )
+    postarcClient.markAllAsRead(targetFolder).catch(() => {})
     toast({ body: `All messages in ${targetFolder} marked as read` })
   }
 
@@ -970,6 +1015,10 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     setComposeInitialData(null)
   }
 
+  const uploadAttachment = async (file: File) => {
+    return await postarcClient.uploadAttachment(file)
+  }
+
   const sendEmail = async (
     to: string,
     subject: string,
@@ -989,8 +1038,8 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
         attachments: attachments?.map((att) => ({
           blobId: att.id,
           name: att.name,
-          type: "application/octet-stream",
-          size: 1024,
+          type: att.type === "pdf" ? "application/pdf" : att.type === "image" ? "image/png" : "application/octet-stream",
+          size: typeof att.size === "number" ? att.size : 1024,
         })),
       })
 
@@ -1004,7 +1053,25 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
 
   const saveDraft = (to: string, subject: string, body: string, attachments?: EmailAttachment[]) => {
     if (!to && !subject && !body) return
-    toast({ body: "Draft saved" })
+    postarcClient
+      .saveDraft({
+        to,
+        subject,
+        body,
+        attachments: attachments?.map((a) => ({
+          blobId: a.id,
+          name: a.name,
+          type: a.type === "pdf" ? "application/pdf" : a.type === "image" ? "image/png" : "application/octet-stream",
+          size: typeof a.size === "number" ? a.size : 1024,
+        })),
+      })
+      .then(() => {
+        toast({ body: "Draft saved to server" })
+        refreshMailbox()
+      })
+      .catch((e) => {
+        console.warn("Save draft error:", e)
+      })
   }
 
   const createCustomFolder = (name: string, _color?: string) => {
@@ -1126,6 +1193,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
         clearComposeInitialData,
         refreshMailbox,
         sendEmail,
+        uploadAttachment,
         saveDraft,
         setActiveCategory,
         setActiveFolder,

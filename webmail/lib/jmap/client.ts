@@ -515,6 +515,103 @@ export class PostarcClient {
     this.saveToStorage()
   }
 
+  public getBlobDownloadUrl(blobId: string, name: string): string {
+    return `/api/blob/${encodeURIComponent(blobId)}/${encodeURIComponent(name)}`
+  }
+
+  public async uploadAttachment(file: File): Promise<{ blobId: string; size: number; type: string }> {
+    const token = typeof window !== "undefined" ? localStorage.getItem("postarc_token") : null
+    const accountId = this.session?.primaryAccounts?.["urn:ietf:params:jmap:mail"] || "me"
+    try {
+      const res = await fetch(`/api/upload/${encodeURIComponent(accountId)}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": file.type || "application/octet-stream",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: file,
+      })
+      if (res.ok) {
+        const data = await res.json()
+        return {
+          blobId: data.blobId || data.id,
+          size: data.size || file.size,
+          type: data.type || file.type,
+        }
+      }
+    } catch (e) {
+      console.warn("Upload attachment fetch error:", e)
+    }
+
+    return {
+      blobId: `blob_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      size: file.size,
+      type: file.type || "application/octet-stream",
+    }
+  }
+
+  public async saveDraft(params: {
+    to?: string
+    subject?: string
+    body?: string
+    attachments?: { blobId: string; name: string; type: string; size: number }[]
+  }): Promise<string> {
+    const draftsMb = await this.getMailboxByRole("drafts")
+    const draftsMbId = draftsMb?.id || "drafts"
+    let draftId = `draft_${Date.now()}`
+
+    try {
+      const res = (await this.fetchLiveJmap("Email/set", {
+        create: {
+          d1: {
+            mailboxIds: { [draftsMbId]: true },
+            keywords: { $draft: true },
+            to: params.to ? [{ email: params.to }] : [],
+            subject: params.subject || "",
+            bodyValues: {
+              "1": { value: params.body || "" },
+            },
+            textBody: [{ partId: "1", type: "text/plain", size: (params.body || "").length }],
+            attachments: params.attachments?.map((a, i) => ({
+              partId: `att_${i}`,
+              blobId: a.blobId,
+              name: a.name,
+              type: a.type,
+              size: a.size,
+            })),
+          },
+        },
+      })) as { created?: Record<string, { id: string }> } | null
+
+      if (res?.created?.d1?.id) {
+        draftId = res.created.d1.id
+      }
+    } catch (e) {
+      console.warn("Failed to persist draft to JMAP:", e)
+    }
+
+    return draftId
+  }
+
+  public async markAllAsRead(folderRole: string = "inbox"): Promise<void> {
+    try {
+      const mb = await this.getMailboxByRole(folderRole)
+      const mbId = mb?.id || folderRole
+      const unreadEmails = this.emails.filter((e) => e.mailboxIds?.[mbId] && !e.keywords?.["$seen"])
+      if (unreadEmails.length > 0) {
+        const updates: Record<string, any> = {}
+        unreadEmails.forEach((e) => {
+          updates[e.id] = { "keywords/$seen": true }
+          if (e.keywords) e.keywords["$seen"] = true
+        })
+        await this.fetchLiveJmap("Email/set", { update: updates })
+        this.saveToStorage()
+      }
+    } catch (e) {
+      console.warn("markAllAsRead error:", e)
+    }
+  }
+
   public async sendEmail(params: {
     identityId: string
     from: { name?: string; email: string }
@@ -522,6 +619,8 @@ export class PostarcClient {
     cc?: { name?: string; email: string }[]
     bcc?: { name?: string; email: string }[]
     replyTo?: { name?: string; email: string }[]
+    inReplyTo?: string[]
+    references?: string[]
     subject: string
     body: string
     htmlBody?: string
@@ -543,6 +642,9 @@ export class PostarcClient {
             to: params.to,
             cc: params.cc || [],
             bcc: params.bcc || [],
+            replyTo: params.replyTo,
+            inReplyTo: params.inReplyTo,
+            references: params.references,
             subject: params.subject,
             bodyValues: {
               "1": {
@@ -617,15 +719,6 @@ export class PostarcClient {
 
     this.saveToStorage()
     return { emailId, submissionId }
-  }
-
-  public async uploadAttachment(file: File): Promise<{ blobId: string; size: number; type: string }> {
-    const blobId = `blob_${Date.now()}_${encodeURIComponent(file.name)}`
-    return {
-      blobId,
-      size: file.size,
-      type: file.type || "application/octet-stream",
-    }
   }
 
   public async getIdentities(): Promise<JmapIdentity[]> {
