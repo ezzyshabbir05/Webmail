@@ -1,0 +1,54 @@
+[package]
+name = "postarc-server"
+version = "0.1.0"
+edition = "2021"
+authors = ["Postarc Engineering"]
+description = "Unified high-performance mail engine in Rust (SMTP, IMAP4rev2, JMAP, Sieve)"
+
+[dependencies]
+# Async Runtime & Concurrency
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec", "io"] }
+bytes = "1"
+futures-util = "0.3"
+
+# TLS & Cryptography
+tokio-rustls = "0.26"
+rustls-pki-types = "1"
+rcgen = "0.13"
+
+# Web & HTTP (JMAP)
+axum = { version = "0.8", features = ["macros", "json"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Mail Protocols & MIME
+imap-codec = "1.0"
+mail-parser = "0.11"
+mail-builder = "2.0"
+mail-auth = { version = "0.13", default-features = false, features = ["rust-crypto", "dns-hickory", "generate"] }
+sieve-rs = "0.7"
+
+# Database & Storage
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono", "uuid", "migrate"] }
+aws-sdk-s3 = "1"
+aws-config = "1"
+
+# Authentication & Security
+argon2 = "0.5"
+jsonwebtoken = "9"
+
+# Networking & DNS
+hickory-resolver = { version = "0.24", features = ["dnssec-ring", "tokio-runtime"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
+
+# Utilities & Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde", "clock"] }
+dotenvy = "0.15"
+sha2 = "0.10"
+hex = "0.4"
