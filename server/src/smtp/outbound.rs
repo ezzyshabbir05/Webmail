@@ -263,33 +263,29 @@ async fn deliver_via_smtp(
         if starttls_resp.starts_with("220") {
             let stream = reader.into_inner();
             let connector = crate::tls::build_outbound_tls_connector();
-            if let Ok(dns_name) = ServerName::try_from(mx_host.to_string()) {
-                match connector.connect(dns_name.to_owned(), stream).await {
-                    Ok(tls_stream) => {
-                        info!("Upgraded outbound SMTP connection to {} via STARTTLS (TLS active)", mx_host);
-                        let (r, mut w) = tokio::io::split(tls_stream);
-                        let mut tls_reader = BufReader::new(r);
+            let dns_name = ServerName::try_from(mx_host.to_string())
+                .map_err(|e| format!("Invalid MX hostname {}: {}", mx_host, e))?;
 
-                        // Re-send EHLO after TLS handshake per RFC 3207
-                        w.write_all(format!("EHLO {}\r\n", hostname).as_bytes()).await?;
-                        loop {
-                            let mut line = String::new();
-                            tls_reader.read_line(&mut line).await?;
-                            if line.starts_with("250 ") {
-                                break;
-                            } else if !line.starts_with("250-") {
-                                return Err(format!("EHLO over TLS failed: {}", line).into());
-                            }
-                        }
+            let tls_stream = connector.connect(dns_name.to_owned(), stream).await
+                .map_err(|e| format!("STARTTLS handshake failed with {}: {}", mx_host, e))?;
 
-                        return finish_smtp_dialogue(&mut tls_reader, &mut w, sender, recipient, payload).await;
-                    }
-                    Err(e) => {
-                        warn!("STARTTLS handshake with {} failed: {}. Aborting connection.", mx_host, e);
-                        return Err(format!("TLS handshake failed: {}", e).into());
-                    }
+            info!("Upgraded outbound SMTP connection to {} via STARTTLS (TLS active)", mx_host);
+            let (r, mut w) = tokio::io::split(tls_stream);
+            let mut tls_reader = BufReader::new(r);
+
+            // Re-send EHLO after TLS handshake per RFC 3207
+            w.write_all(format!("EHLO {}\r\n", hostname).as_bytes()).await?;
+            loop {
+                let mut line = String::new();
+                tls_reader.read_line(&mut line).await?;
+                if line.starts_with("250 ") {
+                    break;
+                } else if !line.starts_with("250-") {
+                    return Err(format!("EHLO over TLS failed: {}", line).into());
                 }
             }
+
+            return finish_smtp_dialogue(&mut tls_reader, &mut w, sender, recipient, payload).await;
         }
     }
 
