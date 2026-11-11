@@ -1,7 +1,10 @@
+mod auth;
 mod config;
+mod db;
 
 use config::PostarcConfig;
-use tracing::{info, Level};
+use db::MailRepository;
+use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main]
@@ -28,7 +31,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("JMAP API Port: {}", config.jmap_bind_addr);
     info!("Storage Mode: {:?}", config.storage_backend);
 
-    // Placeholder until protocol listeners are attached in upcoming phases
+    // Initialize Database
+    let repo = match db::init_pool(&config.database_url).await {
+        Ok(pool) => {
+            info!("Connected to PostgreSQL successfully.");
+            let repo = MailRepository::new(pool);
+            if let Err(e) = repo.run_migrations().await {
+                error!("Failed to execute database migrations: {}", e);
+                return Err(Box::new(e) as Box<dyn std::error::Error>);
+            }
+            info!("PostgreSQL schema migrations verified/applied.");
+
+            match repo.seed_default_account(&config.mail_domain, "admin123").await {
+                Ok(acc) => info!("Default admin mailbox ready: {}", acc.email),
+                Err(e) => error!("Failed to seed admin account: {}", e),
+            }
+
+            Some(repo)
+        }
+        Err(e) => {
+            warn!("PostgreSQL connection unavailable: {}. (Run 'docker compose up -d' for full stack)", e);
+            None
+        }
+    };
+
+    if repo.is_some() {
+        info!("Core database subsystem active and ready.");
+    }
+
     info!("Postarc daemon core initialized. Awaiting shutdown signal...");
 
     tokio::select! {

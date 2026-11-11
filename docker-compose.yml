@@ -1,0 +1,51 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: postarc-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: postarc
+      POSTGRES_USER: postarc
+      POSTGRES_PASSWORD: secret
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postarc -d postarc"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+
+  postarc:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: postarc-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgres://postarc:secret@postgres:5432/postarc
+      - MAIL_DOMAIN=agilique.com
+      - MAIL_HOSTNAME=mail.agilique.com
+      - STORAGE_BACKEND=fs
+      - STORAGE_FS_PATH=/data/blobs
+      - SMTP_BIND_ADDR=0.0.0.0:25
+      - SUBMISSION_BIND_ADDR=0.0.0.0:587
+      - IMAPS_BIND_ADDR=0.0.0.0:993
+      - JMAP_BIND_ADDR=0.0.0.0:8080
+    ports:
+      - "25:25"
+      - "465:465"
+      - "587:587"
+      - "993:993"
+      - "8080:8080"
+      - "4190:4190"
+    volumes:
+      - blobstorage:/data/blobs
+
+volumes:
+  pgdata:
+  blobstorage:
