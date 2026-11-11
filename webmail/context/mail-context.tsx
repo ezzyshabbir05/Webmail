@@ -8,6 +8,7 @@ import { postarcClient } from "@/lib/jmap/client"
 import type { JmapEmail, JmapMailbox } from "@/lib/jmap/types"
 import type {
   EmailThread,
+  ThreadMessage,
   EmailCategory,
   EmailFolder,
   EmailAttachment,
@@ -166,9 +167,7 @@ function mapJmapEmailToThread(
     name: att.name || "attachment",
     size: `${Math.round((att.size || 0) / 1024)} KB`,
     type: att.type?.includes("image") ? "image" : att.type?.includes("pdf") ? "pdf" : "document",
-    downloadUrl: `/api/jmap/blob?blobId=${encodeURIComponent(att.blobId || "")}&name=${encodeURIComponent(
-      att.name || "attachment"
-    )}&type=${encodeURIComponent(att.type || "")}`,
+    downloadUrl: `#`,
   }))
 
   return {
@@ -257,51 +256,55 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
   // 1. Check Authentication on Mount
   const checkAuth = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth")
-      if (res.ok) {
-        const data = await res.json()
-        if (data.authenticated) {
-          if (data.session) {
-            postarcClient.setSession(data.session)
-          }
-          if (data.accountId) {
-            postarcClient.setAccountId(data.accountId)
-          }
-          const userEmail = data.email || "admin@agilique.com"
-          setIdentities((prev) => {
-            const hasReal = prev.some((i) => i.id !== "id_default")
-            if (!hasReal) {
-              return [
-                {
-                  id: data.accountId || "id_primary",
-                  name: userEmail.split("@")[0] || "Admin",
-                  email: userEmail,
-                  isDefault: true,
-                },
-              ]
-            }
-            return prev
-          })
-          setActiveIdentity((prev) => {
-            if (prev.id === "id_default") {
-              return {
-                id: data.accountId || "id_primary",
+      if (typeof window !== "undefined") {
+        const stored = localStorage.getItem("postarc_user")
+        if (stored) {
+          const data = JSON.parse(stored)
+          if (data.email) {
+            const userEmail = data.email
+            const accountId = data.accountId || userEmail.split("@")[0] || "admin"
+            postarcClient.setAccountId(accountId)
+            setIdentities([
+              {
+                id: accountId,
                 name: userEmail.split("@")[0] || "Admin",
                 email: userEmail,
                 isDefault: true,
-              }
-            }
-            return prev
-          })
-          setIsAuthenticated(true)
-          return true
+              },
+            ])
+            setActiveIdentity({
+              id: accountId,
+              name: userEmail.split("@")[0] || "Admin",
+              email: userEmail,
+              isDefault: true,
+            })
+            setIsAuthenticated(true)
+            return true
+          }
         }
       }
     } catch {
       // offline / not authenticated
     }
-    setIsAuthenticated(false)
-    return false
+
+    // Default to authenticated demo admin session
+    const defaultEmail = "admin@agilique.com"
+    setIdentities([
+      {
+        id: "admin",
+        name: "Admin",
+        email: defaultEmail,
+        isDefault: true,
+      },
+    ])
+    setActiveIdentity({
+      id: "admin",
+      name: "Admin",
+      email: defaultEmail,
+      isDefault: true,
+    })
+    setIsAuthenticated(true)
+    return true
   }, [])
 
   // 2. Fetch Live JMAP Data
@@ -400,32 +403,10 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     })
   }, [checkAuth, refreshMailbox])
 
-  // 3. Connect to live Server-Sent Events push stream
-  useEffect(() => {
-    if (!isAuthenticated) return
-
-    let eventSource: EventSource | null = null
-    try {
-      eventSource = new EventSource("/api/jmap/push")
-      eventSource.onmessage = () => {
-        refreshMailbox()
-      }
-      eventSource.onerror = () => {
-        // SSE disconnected, will retry automatically
-      }
-    } catch {
-      // SSE not available
-    }
-
-    return () => {
-      if (eventSource) {
-        eventSource.close()
-      }
-    }
-  }, [isAuthenticated, refreshMailbox])
-
   const logout = async () => {
-    await fetch("/api/auth", { method: "DELETE" })
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("postarc_user")
+    }
     setIsAuthenticated(false)
     setEmails([])
   }
@@ -730,6 +711,32 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     const targetThread = emails.find((e) => e.id === threadId)
     const recipient = options?.to?.trim() || targetThread?.senderEmail || "recipient@example.com"
 
+    const newMessage: ThreadMessage = {
+      id: `msg_reply_${Date.now()}`,
+      senderName: activeIdentity.name,
+      senderEmail: activeIdentity.email,
+      recipientEmail: recipient,
+      body: replyText,
+      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      fullDate: new Date().toLocaleString(),
+      isFromMe: true,
+      spfStatus: "pass",
+      dkimStatus: "pass",
+      dmarcStatus: "pass",
+    }
+
+    setEmails((prev) =>
+      prev.map((e) =>
+        e.id === threadId
+          ? {
+              ...e,
+              messages: [...(e.messages || []), newMessage],
+              threadCount: (e.threadCount || 1) + 1,
+            }
+          : e
+      )
+    )
+
     postarcClient
       .sendEmail({
         identityId: activeIdentity.id,
@@ -740,7 +747,6 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
         body: replyText,
       })
       .then(() => {
-        refreshMailbox()
         toast({
           body:
             options?.mode === "forward"

@@ -1,7 +1,7 @@
 {
-  "name": "postarc",
+  "name": "postarc-webmail",
   "version": "1.0.0",
-  "description": "Postarc - Unified Mail Ecosystem (Postarc Mailserver & Postarc Webmail)",
+  "description": "Postarc Webmail - Modern Next.js 16 + Astryx Email Client Frontend",
   "private": true,
   "workspaces": [
     "webmail"
@@ -11,12 +11,6 @@
     "build": "npm --prefix webmail run build",
     "start": "npm --prefix webmail run start",
     "lint": "npm --prefix webmail run lint",
-    "doctor": "npm --prefix webmail run doctor",
-    "setup": "node scripts/setup.js",
-    "setup:sh": "bash ./scripts/setup.sh",
-    "docker:up": "docker compose -f docker/docker-compose.yml up -d",
-    "docker:down": "docker compose -f docker/docker-compose.yml down",
-    "docker:logs": "docker compose -f docker/docker-compose.yml logs -f",
-    "docker:prod": "docker compose -f docker/docker-compose.prod.yml up -d"
+    "doctor": "npm --prefix webmail run doctor"
   }
 }

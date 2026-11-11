@@ -1,4 +1,0 @@
-{
-  "@type": "Sqlite",
-  "path": "/var/lib/postarc/postarc.db"
-}
