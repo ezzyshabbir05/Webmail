@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod db;
 mod event_bus;
+mod jmap;
 mod storage;
 
 use config::PostarcConfig;
@@ -44,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Blob storage subsystem ready.");
 
     // Initialize Database
-    let repo = match db::init_pool(&config.database_url).await {
+    let repo_opt = match db::init_pool(&config.database_url).await {
         Ok(pool) => {
             info!("Connected to PostgreSQL successfully.");
             let repo = MailRepository::new(pool);
@@ -71,8 +72,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    if repo.is_some() {
+    if let Some(repo) = repo_opt {
         info!("Core database subsystem active and ready.");
+
+        // Start JMAP & HTTP server
+        let app_state = jmap::AppState {
+            repo: repo.clone(),
+            storage: storage.clone(),
+            event_bus: event_bus.clone(),
+            default_domain: config.mail_domain.clone(),
+        };
+
+        let jmap_bind_addr = config.jmap_bind_addr;
+        tokio::spawn(async move {
+            if let Err(e) = jmap::run_jmap_server(jmap_bind_addr, app_state).await {
+                error!("JMAP server terminated with error: {}", e);
+            }
+        });
     }
 
     info!("Postarc daemon core initialized. Awaiting shutdown signal...");
