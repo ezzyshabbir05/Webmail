@@ -6,6 +6,11 @@
 
 set -euo pipefail
 
+# Ensure script runs from the repository root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "${PROJECT_ROOT}"
+
 # ANSI color codes
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
@@ -78,8 +83,11 @@ if [ -f .env ]; then
     if [[ ! "${RECONFIG_CHOICE}" =~ ^[Yy]$ ]]; then
         RECONFIGURE=false
         echo -e "${GREEN}Using existing .env configuration.${NC}"
-        # Load existing .env
-        export $(grep -v '^#' .env | xargs)
+        # Load existing .env safely
+        set -a
+        # shellcheck disable=SC1091
+        [ -f .env ] && . ./.env
+        set +a
     fi
 fi
 
@@ -117,7 +125,7 @@ if [ "${RECONFIGURE}" = true ]; then
     echo -e "${BOLD}${CYAN}=== Step 2: Administrator Credentials ===${NC}"
     read -rp "Enter admin password (press ENTER to auto-generate a secure random password): " INPUT_ADMIN_PASS
     if [ -z "${INPUT_ADMIN_PASS}" ]; then
-        ADMIN_PASSWORD=$(openssl rand -base64 18 | tr -dc 'a-zA-Z0-9!@#$' | head -c 16)
+        ADMIN_PASSWORD=$(openssl rand -base64 18 | tr -dc 'a-zA-Z0-9_' | head -c 16)
         echo -e "${GREEN}Generated Admin Password: ${BOLD}${ADMIN_PASSWORD}${NC}"
     else
         ADMIN_PASSWORD="${INPUT_ADMIN_PASS}"
@@ -246,8 +254,10 @@ CONFIRM_LAUNCH="${CONFIRM_LAUNCH:-Y}"
 
 if [[ "${CONFIRM_LAUNCH}" =~ ^[Yy]$ ]]; then
     echo ""
-    echo -e "${CYAN}Building and launching Postarc production containers...${NC}"
-    ${COMPOSE_CMD} -f docker-compose.prod.yml up -d --build
+    echo -e "${CYAN}Building Postarc production containers (server & webmail)...${NC}"
+    ${COMPOSE_CMD} -f docker-compose.prod.yml build
+    echo -e "${CYAN}Launching Postarc production containers...${NC}"
+    ${COMPOSE_CMD} -f docker-compose.prod.yml up -d
 
     echo ""
     echo -e "${GREEN}==============================================================================${NC}"
@@ -264,11 +274,11 @@ if [[ "${CONFIRM_LAUNCH}" =~ ^[Yy]$ ]]; then
     echo -e "  Password: ${BOLD}${ADMIN_PASSWORD}${NC}"
     echo ""
     echo "Useful diagnostic commands:"
-    echo "  Follow logs:    \${COMPOSE_CMD} -f docker-compose.prod.yml logs -f"
-    echo "  Service status: \${COMPOSE_CMD} -f docker-compose.prod.yml ps"
-    echo "  Restart stack:  \${COMPOSE_CMD} -f docker-compose.prod.yml restart"
+    echo "  Follow logs:    ${COMPOSE_CMD} -f docker-compose.prod.yml logs -f"
+    echo "  Service status: ${COMPOSE_CMD} -f docker-compose.prod.yml ps"
+    echo "  Restart stack:  ${COMPOSE_CMD} -f docker-compose.prod.yml restart"
     echo "=============================================================================="
 else
     echo -e "${YELLOW}Setup complete. You can start the stack anytime by running:${NC}"
-    echo "  \${COMPOSE_CMD} -f docker-compose.prod.yml up -d --build"
+    echo "  ${COMPOSE_CMD} -f docker-compose.prod.yml up -d --build"
 fi
