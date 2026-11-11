@@ -18,7 +18,7 @@ interface PostarcAuthProps {
 }
 
 export function PostarcAuth({ onSuccess }: PostarcAuthProps) {
-  const [email, setEmail] = useState("admin@agilique.com")
+  const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
   const [serverUrl, setServerUrl] = useState("")
   const [showAdvanced, setShowAdvanced] = useState(false)
@@ -35,7 +35,6 @@ export function PostarcAuth({ onSuccess }: PostarcAuthProps) {
     setIsLoading(true)
     setErrorMessage(null)
 
-    // Pure frontend authentication with client-side session persistence
     setTimeout(() => {
       try {
         const cleanEmail = email.trim().toLowerCase()
@@ -43,7 +42,7 @@ export function PostarcAuth({ onSuccess }: PostarcAuthProps) {
         const sessionData = {
           email: cleanEmail,
           accountId,
-          serverUrl: serverUrl.trim() || "http://mail.agilique.com",
+          serverUrl: serverUrl.trim() || (typeof window !== "undefined" ? window.location.origin : ""),
           authenticated: true,
         }
 
@@ -123,7 +122,7 @@ export function PostarcAuth({ onSuccess }: PostarcAuthProps) {
                   type="url"
                   value={serverUrl}
                   onChange={(val) => setServerUrl(val)}
-                  placeholder="http://mail.agilique.com"
+                  placeholder="https://mail.yourdomain.com"
                   description="Optional JMAP server host endpoint"
                   width="100%"
                 />

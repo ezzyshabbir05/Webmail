@@ -287,24 +287,8 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
       // offline / not authenticated
     }
 
-    // Default to authenticated demo admin session
-    const defaultEmail = "admin@agilique.com"
-    setIdentities([
-      {
-        id: "admin",
-        name: "Admin",
-        email: defaultEmail,
-        isDefault: true,
-      },
-    ])
-    setActiveIdentity({
-      id: "admin",
-      name: "Admin",
-      email: defaultEmail,
-      isDefault: true,
-    })
-    setIsAuthenticated(true)
-    return true
+    setIsAuthenticated(false)
+    return false
   }, [])
 
   // 2. Fetch Live JMAP Data

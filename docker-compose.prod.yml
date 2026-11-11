@@ -10,8 +10,8 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      MAIL_HOSTNAME: ${MAIL_HOSTNAME:-mail.agilique.com}
-      ACME_EMAIL: ${ACME_EMAIL:-admin@agilique.com}
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME}
+      ACME_EMAIL: ${ACME_EMAIL}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -33,7 +33,7 @@ services:
       - "3000"
     environment:
       - NODE_ENV=production
-      - NEXT_PUBLIC_POSTARC_API_URL=https://${MAIL_HOSTNAME:-mail.agilique.com}
+      - NEXT_PUBLIC_POSTARC_API_URL=https://${MAIL_HOSTNAME}
     depends_on:
       - postarc-server
 
@@ -55,10 +55,12 @@ services:
     expose:
       - "8080"       # JMAP / HTTP internal
     environment:
-      - DATABASE_URL=postgres://${POSTGRES_USER:-postarc}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-postarc}
-      - MAIL_DOMAIN=${MAIL_DOMAIN:-agilique.com}
-      - MAIL_HOSTNAME=${MAIL_HOSTNAME:-mail.agilique.com}
-      - STORAGE_BACKEND=${STORAGE_BACKEND:-s3}
+      - DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      - MAIL_DOMAIN=${MAIL_DOMAIN}
+      - MAIL_HOSTNAME=${MAIL_HOSTNAME}
+      - ADMIN_EMAIL=${ADMIN_EMAIL}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
+      - STORAGE_BACKEND=${STORAGE_BACKEND}
       - STORAGE_FS_PATH=/data/blobs
       - R2_BUCKET=${R2_BUCKET}
       - R2_ENDPOINT=${R2_ENDPOINT}
@@ -73,7 +75,7 @@ services:
     volumes:
       - caddy_data:/data/caddy:ro
       - blobstorage:/data/blobs
-      - dkim_keys:/data/dkim
+      - ./data/dkim:/data/dkim:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -110,7 +112,7 @@ services:
       - "11333"
     volumes:
       - rspamd_data:/var/lib/rspamd
-      - dkim_keys:/var/lib/rspamd/dkim:ro
+      - ./data/dkim:/var/lib/rspamd/dkim:ro
 
 volumes:
   caddy_data:
@@ -118,4 +120,3 @@ volumes:
   pgdata:
   blobstorage:
   rspamd_data:
-  dkim_keys:

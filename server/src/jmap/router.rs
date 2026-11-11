@@ -26,7 +26,7 @@ pub struct AppState {
     pub repo: MailRepository,
     pub storage: Arc<dyn BlobStorage>,
     pub event_bus: EventBus,
-    pub default_domain: String,
+    pub default_admin_email: String,
 }
 
 pub fn create_router(state: AppState) -> Router {
@@ -54,18 +54,16 @@ pub async fn run_jmap_server(bind_addr: SocketAddr, state: AppState) -> Result<(
     Ok(())
 }
 
-async fn get_default_account_id(state: &AppState) -> Uuid {
-    let email = format!("admin@{}", state.default_domain);
-    if let Ok(Some(acc)) = state.repo.get_account_by_email(&email).await {
-        acc.id
+async fn get_default_account(state: &AppState) -> (Uuid, String) {
+    if let Ok(Some(acc)) = state.repo.get_account_by_email(&state.default_admin_email).await {
+        (acc.id, acc.email)
     } else {
-        Uuid::nil()
+        (Uuid::nil(), state.default_admin_email.clone())
     }
 }
 
 async fn get_session(State(state): State<AppState>) -> Response {
-    let account_id = get_default_account_id(&state).await;
-    let username = format!("admin@{}", state.default_domain);
+    let (account_id, username) = get_default_account(&state).await;
     let session = build_session(account_id, &username);
     Json(session).into_response()
 }
@@ -74,7 +72,7 @@ async fn post_jmap(
     State(state): State<AppState>,
     Json(req): Json<JmapRequest>,
 ) -> Response {
-    let account_id = get_default_account_id(&state).await;
+    let (account_id, _) = get_default_account(&state).await;
     let mut method_responses = Vec::new();
 
     for (name, args, call_id) in req.method_calls {
@@ -114,7 +112,7 @@ async fn post_jmap(
 }
 
 async fn get_events(State(state): State<AppState>) -> Response {
-    let account_id = get_default_account_id(&state).await;
+    let (account_id, _) = get_default_account(&state).await;
     handle_sse(state.event_bus.clone(), account_id).await.into_response()
 }
 

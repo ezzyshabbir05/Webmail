@@ -1,9 +1,9 @@
 {
-    email {$ACME_EMAIL:admin@agilique.com}
+    email {$ACME_EMAIL}
     admin off
 }
 
-{$MAIL_HOSTNAME:mail.agilique.com} {
+{$MAIL_HOSTNAME} {
     encode zstd gzip
 
     # Security Headers

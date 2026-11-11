@@ -6,6 +6,8 @@ use std::net::SocketAddr;
 pub struct PostarcConfig {
     pub mail_domain: String,
     pub hostname: String,
+    pub admin_email: String,
+    pub admin_password: String,
     pub database_url: String,
 
     // Bind Addresses
@@ -41,8 +43,10 @@ impl PostarcConfig {
     pub fn from_env() -> Self {
         dotenvy::dotenv().ok();
 
-        let mail_domain = env::var("MAIL_DOMAIN").unwrap_or_else(|_| "agilique.com".to_string());
+        let mail_domain = env::var("MAIL_DOMAIN").unwrap_or_else(|_| "localhost".to_string());
         let hostname = env::var("MAIL_HOSTNAME").unwrap_or_else(|_| format!("mail.{}", mail_domain));
+        let admin_email = env::var("ADMIN_EMAIL").unwrap_or_else(|_| format!("admin@{}", mail_domain));
+        let admin_password = env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "admin123".to_string());
         let database_url = env::var("DATABASE_URL")
             .unwrap_or_else(|_| "postgres://postarc:secret@localhost:5432/postarc".to_string());
 
@@ -93,6 +97,8 @@ impl PostarcConfig {
         Self {
             mail_domain,
             hostname,
+            admin_email,
+            admin_password,
             database_url,
             smtp_bind_addr,
             submission_bind_addr,

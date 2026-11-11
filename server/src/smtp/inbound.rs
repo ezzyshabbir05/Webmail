@@ -52,7 +52,7 @@ pub async fn process_inbound_mail(
         .and_then(|p| p.from())
         .and_then(|f| f.first())
         .and_then(|a| a.address())
-        .unwrap_or("unknown@example.com")
+        .unwrap_or("unknown@sender.invalid")
         .to_string();
 
     let snippet = parsed

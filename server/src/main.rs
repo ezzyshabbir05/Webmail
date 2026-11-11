@@ -56,8 +56,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             info!("PostgreSQL schema migrations verified/applied.");
 
-            match repo.seed_default_account(&config.mail_domain, "admin123").await {
-                Ok(acc) => info!("Default admin mailbox ready: {}", acc.email),
+            match repo.seed_default_account(&config.admin_email, &config.admin_password).await {
+                Ok(acc) => info!("Admin mailbox ready: {}", acc.email),
                 Err(e) => error!("Failed to seed admin account: {}", e),
             }
 
@@ -85,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             repo: repo.clone(),
             storage: storage.clone(),
             event_bus: event_bus.clone(),
-            default_domain: config.mail_domain.clone(),
+            default_admin_email: config.admin_email.clone(),
         };
 
         let jmap_bind_addr = config.jmap_bind_addr;

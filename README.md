@@ -57,8 +57,8 @@ npm run dev
 ```
 
 Open `http://localhost:3000` in your browser. Default login:
-- **Email**: `admin@agilique.com`
-- **Password**: `admin123`
+- **Email**: `admin@localhost` (or the email configured in `ADMIN_EMAIL`)
+- **Password**: `admin123` (or the password configured in `ADMIN_PASSWORD`)
 
 ---
 
@@ -71,7 +71,7 @@ telnet 127.0.0.1 25
 # Or via netcat / PowerShell TCP
 HELO client.example.com
 MAIL FROM:<sender@example.com>
-RCPT TO:<admin@agilique.com>
+RCPT TO:<admin@localhost>
 DATA
 Subject: Test Inbound Email
 
@@ -97,7 +97,7 @@ curl -X POST http://localhost:8080/api/jmap \
 Connect and inspect mailboxes:
 ```text
 * OK [CAPABILITY IMAP4rev2 IMAP4rev1 IDLE MOVE SPECIAL-USE] Postarc IMAP Service ready
-a1 LOGIN admin@agilique.com admin123
+a1 LOGIN admin@localhost admin123
 a2 LIST "" "*"
 a3 SELECT "Inbox"
 a4 FETCH 1:* (UID FLAGS RFC822.SIZE)
@@ -106,17 +106,30 @@ a5 LOGOUT
 
 ---
 
-## Production Deployment (Cloudflare R2)
+## Production VPS Deployment (Zero Hardcoding)
 
-To enable Cloudflare R2 in production, configure the following environment variables in `.env` or `docker-compose.yml`:
+To deploy Postarc on an Ubuntu / Debian VPS:
 
-```env
-STORAGE_BACKEND=s3
-R2_BUCKET=postarc-mail
-R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
-R2_ACCESS_KEY_ID=<your-access-key-id>
-R2_SECRET_ACCESS_KEY=<your-secret-access-key>
-DATABASE_URL=postgres://postarc:secret@postgres:5432/postarc
-MAIL_DOMAIN=agilique.com
-MAIL_HOSTNAME=mail.agilique.com
-```
+1. Clone repository to your VPS:
+   ```bash
+   git clone https://github.com/shabbirezzy/postarc.git
+   cd postarc
+   ```
+
+2. Run the interactive VPS setup wizard:
+   ```bash
+   bash scripts/setup-vps.sh
+   ```
+   The wizard will:
+   - Verify/install Docker & Compose
+   - Interactively prompt for your Domain, Hostname, Admin Email, Admin Password, and Storage Backend (Local NVMe or Cloudflare R2)
+   - Auto-generate cryptographically secure PostgreSQL passwords, JWT secrets, and 2048-bit DKIM keys
+   - Output exact copy-paste DNS records (MX, SPF, DKIM, DMARC, MTA-STS, A) for your domain
+   - Launch Caddy (auto-ACME SSL), Postarc Mailserver, PostgreSQL 17, and Next.js Webmail.
+
+3. Live production URLs:
+   - **Webmail Interface**: `https://mail.yourdomain.com`
+   - **JMAP Endpoint**: `https://mail.yourdomain.com/.well-known/jmap`
+   - **Inbound SMTP**: `mail.yourdomain.com:25`
+   - **SMTP Submission**: `mail.yourdomain.com:587`
+   - **IMAPS**: `mail.yourdomain.com:993`

@@ -237,8 +237,8 @@ const INITIAL_EMAILS: JmapEmail[] = [
     keywords: { $flagged: true },
     size: 24576,
     receivedAt: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-    from: [{ name: "Elena Rostova", email: "elena.rostova@agilique.com" }],
-    to: [{ name: "Postarc Team", email: "team@agilique.com" }],
+    from: [{ name: "Elena Rostova", email: "elena.rostova@example.com" }],
+    to: [{ name: "Postarc Team", email: "team@example.com" }],
     subject: "Q4 Engineering Roadmap & Postarc Architecture Milestone",
     preview: "Hey team, I've reviewed the latest architecture specs and the Astryx UI implementation. Everything looks solid...",
     bodyValues: {
@@ -256,7 +256,7 @@ Please review the attached PDF roadmap document and let me know your thoughts be
 
 Best regards,
 Elena Rostova
-VP of Engineering | Agilique`,
+VP of Engineering | Postarc`,
         isEncodingProblem: false,
         isTruncated: false,
       },
@@ -281,7 +281,7 @@ VP of Engineering | Agilique`,
     size: 18432,
     receivedAt: new Date(Date.now() - 1000 * 60 * 55).toISOString(),
     from: [{ name: "Astryx Design System", email: "hello@astryxdesign.org" }],
-    to: [{ name: "Postarc User", email: "admin@agilique.com" }],
+    to: [{ name: "Postarc User", email: "admin@example.com" }],
     subject: "Welcome to Astryx Component Library & Postarc UI System",
     preview: "Welcome to your new modern webmail experience built with 100% token-backed components and responsive layouts...",
     bodyValues: {
@@ -314,8 +314,8 @@ The Astryx Team`,
     size: 12288,
     receivedAt: new Date(Date.now() - 1000 * 60 * 130).toISOString(),
     from: [{ name: "GitHub Security", email: "security@github.com" }],
-    to: [{ name: "Admin", email: "admin@agilique.com" }],
-    subject: "[Security Alert] Token permissions updated for @agilique/postarc-webmail",
+    to: [{ name: "Admin", email: "admin@example.com" }],
+    subject: "[Security Alert] Token permissions updated for @Postarc/postarc-webmail",
     preview: "A personal access token was successfully rotated and scoped for repository access. No further action is required...",
     bodyValues: {
       body1: {
@@ -323,7 +323,7 @@ The Astryx Team`,
 
 A personal access token (fine-grained) associated with your organization was rotated at ${new Date().toLocaleDateString()}.
 
-Repository: agilique/postarc-webmail
+Repository: Postarc/postarc-webmail
 Permissions: Contents (Read & Write), Actions (Read)
 IP Address: 187.127.171.46
 
@@ -345,15 +345,15 @@ GitHub Security Operations`,
     size: 15360,
     receivedAt: new Date(Date.now() - 1000 * 60 * 320).toISOString(),
     from: [{ name: "Cloudflare Status", email: "notifications@cloudflare.com" }],
-    to: [{ name: "Admin", email: "admin@agilique.com" }],
-    subject: "Domain DNS & SSL Certificate Status for agilique.com",
-    preview: "Universal SSL edge certificate has been provisioned and active for mail.agilique.com. Zero Trust security enabled...",
+    to: [{ name: "Admin", email: "admin@example.com" }],
+    subject: "Domain DNS & SSL Certificate Status for example.com",
+    preview: "Universal SSL edge certificate has been provisioned and active for mail.example.com. Zero Trust security enabled...",
     bodyValues: {
       body1: {
         value: `Cloudflare Status Report
 
-Your domain agilique.com has completed certificate provisioning:
-- Hostname: mail.agilique.com
+Your domain example.com has completed certificate provisioning:
+- Hostname: mail.example.com
 - Status: Active (Proxied)
 - SSL/TLS: Full (Strict)
 - HTTP/3 (QUIC): Enabled
@@ -374,7 +374,7 @@ All edge nodes are responding normally with 100% uptime over the past 30 days.`,
     size: 16384,
     receivedAt: new Date(Date.now() - 1000 * 60 * 600).toISOString(),
     from: [{ name: "Figma Community", email: "news@figma.com" }],
-    to: [{ name: "Design Team", email: "admin@agilique.com" }],
+    to: [{ name: "Design Team", email: "admin@example.com" }],
     subject: "New Design Tokens & UI Kits available in the Community",
     preview: "Explore this week's trending design systems, icons, and layout kits for web developers and designers...",
     bodyValues: {
@@ -402,7 +402,7 @@ Open Figma to duplicate any file directly into your workspace.`,
     size: 14336,
     receivedAt: new Date(Date.now() - 1000 * 60 * 950).toISOString(),
     from: [{ name: "Hacker News Digest", email: "digest@hackernews.com" }],
-    to: [{ name: "Tech Enthusiast", email: "admin@agilique.com" }],
+    to: [{ name: "Tech Enthusiast", email: "admin@example.com" }],
     subject: "Top Tech Stories: Modern Web Frameworks & Rust in Production",
     preview: "Here are the top discussion threads and engineering blogs from today: Rust memory safety, Next.js 16 features...",
     bodyValues: {
@@ -429,8 +429,8 @@ Visit news.ycombinator.com to join the discussion.`,
     keywords: { $seen: true },
     size: 12288,
     receivedAt: new Date(Date.now() - 1000 * 60 * 1440).toISOString(),
-    from: [{ name: "Admin", email: "admin@agilique.com" }],
-    to: [{ name: "Elena Rostova", email: "elena.rostova@agilique.com" }],
+    from: [{ name: "Admin", email: "admin@example.com" }],
+    to: [{ name: "Elena Rostova", email: "elena.rostova@example.com" }],
     subject: "Re: Q4 Engineering Roadmap & Postarc Architecture Milestone",
     preview: "Thanks Elena! The frontend is now fully standalone and using Astryx components cleanly...",
     bodyValues: {
@@ -457,8 +457,8 @@ Admin`,
     keywords: { $seen: true },
     size: 10240,
     receivedAt: new Date(Date.now() - 1000 * 60 * 2880).toISOString(),
-    from: [{ name: "Admin", email: "admin@agilique.com" }],
-    to: [{ name: "Finance Team", email: "finance@agilique.com" }],
+    from: [{ name: "Admin", email: "admin@example.com" }],
+    to: [{ name: "Finance Team", email: "finance@example.com" }],
     subject: "Approved: November Infrastructure & Tooling Expenses",
     preview: "All infrastructure costs and tooling licenses for this quarter are approved. Please proceed with disbursement...",
     bodyValues: {
@@ -488,8 +488,8 @@ Admin`,
     keywords: { $seen: true },
     size: 8192,
     receivedAt: new Date(Date.now() - 1000 * 60 * 720).toISOString(),
-    from: [{ name: "Admin", email: "admin@agilique.com" }],
-    to: [{ name: "Engineering All", email: "team@agilique.com" }],
+    from: [{ name: "Admin", email: "admin@example.com" }],
+    to: [{ name: "Engineering All", email: "team@example.com" }],
     subject: "Draft: Release Notes for Postarc Webmail v1.0",
     preview: "We are excited to announce the initial release of Postarc Webmail featuring pure Astryx UI, dark mode...",
     bodyValues: {
@@ -516,7 +516,7 @@ Highlights:
     size: 92160,
     receivedAt: new Date(Date.now() - 1000 * 60 * 4320).toISOString(),
     from: [{ name: "Stripe Billing", email: "invoices@stripe.com" }],
-    to: [{ name: "Accounts Payable", email: "admin@agilique.com" }],
+    to: [{ name: "Accounts Payable", email: "admin@example.com" }],
     subject: "Receipt for your subscription payment #INV-88291",
     preview: "Your subscription payment was successfully processed. Thank you for using our services...",
     bodyValues: {
@@ -553,7 +553,7 @@ Please find the detailed invoice PDF attached for your records.`,
     size: 14336,
     receivedAt: new Date(Date.now() - 1000 * 60 * 1800).toISOString(),
     from: [{ name: "Bulk Domains Promo", email: "deals@bulkmailer-promo.net" }],
-    to: [{ name: "Admin", email: "admin@agilique.com" }],
+    to: [{ name: "Admin", email: "admin@example.com" }],
     subject: "Special Discount: 90% off bulk domain registrations",
     preview: "Exclusive weekend promo for high-volume domain registrations across top level domains...",
     bodyValues: {
@@ -574,7 +574,7 @@ Please find the detailed invoice PDF attached for your records.`,
     size: 7168,
     receivedAt: new Date(Date.now() - 1000 * 60 * 5000).toISOString(),
     from: [{ name: "Automated Monitor", email: "noreply@legacy-monitor.org" }],
-    to: [{ name: "Admin", email: "admin@agilique.com" }],
+    to: [{ name: "Admin", email: "admin@example.com" }],
     subject: "Old server monitor notice (Resolved)",
     preview: "This issue has been closed and resolved automatically by the health checking daemon...",
     bodyValues: {
@@ -592,10 +592,10 @@ const INITIAL_IDENTITIES: JmapIdentity[] = [
   {
     id: "id_admin",
     name: "Admin",
-    email: "admin@agilique.com",
-    replyTo: [{ name: "Admin", email: "admin@agilique.com" }],
-    textSignature: "-- \nPostarc Webmail | Agilique",
-    htmlSignature: "<p>--<br/><strong>Postarc Webmail</strong> | Agilique</p>",
+    email: "admin@example.com",
+    replyTo: [{ name: "Admin", email: "admin@example.com" }],
+    textSignature: "-- \nPostarc Webmail | Postarc",
+    htmlSignature: "<p>--<br/><strong>Postarc Webmail</strong> | Postarc</p>",
     mayDelete: false,
   },
 ]
@@ -604,23 +604,23 @@ const INITIAL_CONTACTS: JmapContactCard[] = [
   {
     id: "c1",
     name: { full: "Elena Rostova", given: "Elena", surname: "Rostova" },
-    emails: { primary: { address: "elena.rostova@agilique.com" } },
+    emails: { primary: { address: "elena.rostova@example.com" } },
     phones: { primary: { number: "+1-555-0192" } },
-    organizations: { primary: { name: "Agilique", title: "VP of Engineering" } },
+    organizations: { primary: { name: "Postarc", title: "VP of Engineering" } },
   },
   {
     id: "c2",
     name: { full: "Marcus Vance", given: "Marcus", surname: "Vance" },
-    emails: { primary: { address: "marcus.vance@agilique.com" } },
+    emails: { primary: { address: "marcus.vance@example.com" } },
     phones: { primary: { number: "+1-555-0144" } },
-    organizations: { primary: { name: "Agilique", title: "Staff Frontend Architect" } },
+    organizations: { primary: { name: "Postarc", title: "Staff Frontend Architect" } },
   },
   {
     id: "c3",
     name: { full: "Sarah Chen", given: "Sarah", surname: "Chen" },
-    emails: { primary: { address: "sarah.chen@agilique.com" } },
+    emails: { primary: { address: "sarah.chen@example.com" } },
     phones: { primary: { number: "+1-555-0188" } },
-    organizations: { primary: { name: "Agilique", title: "Principal Product Designer" } },
+    organizations: { primary: { name: "Postarc", title: "Principal Product Designer" } },
   },
   {
     id: "c4",
@@ -645,8 +645,8 @@ const INITIAL_CALENDAR_EVENTS: JmapCalendarEvent[] = [
     description: "Review Astryx design tokens, standalone frontend performance, and roadmap milestones.",
     locations: { loc1: { name: "Virtual Meeting (Google Meet)" } },
     participants: {
-      p1: { name: "Elena Rostova", email: "elena.rostova@agilique.com" },
-      p2: { name: "Admin", email: "admin@agilique.com" },
+      p1: { name: "Elena Rostova", email: "elena.rostova@example.com" },
+      p2: { name: "Admin", email: "admin@example.com" },
     },
   },
   {
@@ -657,8 +657,8 @@ const INITIAL_CALENDAR_EVENTS: JmapCalendarEvent[] = [
     description: "Review color contrast, dark mode elevation tokens, and button focus rings.",
     locations: { loc1: { name: "Design Room A" } },
     participants: {
-      p1: { name: "Sarah Chen", email: "sarah.chen@agilique.com" },
-      p2: { name: "Admin", email: "admin@agilique.com" },
+      p1: { name: "Sarah Chen", email: "sarah.chen@example.com" },
+      p2: { name: "Admin", email: "admin@example.com" },
     },
   },
   {
@@ -669,7 +669,7 @@ const INITIAL_CALENDAR_EVENTS: JmapCalendarEvent[] = [
     description: "Demonstration of pure frontend Postarc Webmail and Astryx components.",
     locations: { loc1: { name: "Main Auditorium" } },
     participants: {
-      p1: { name: "Team", email: "team@agilique.com" },
+      p1: { name: "Team", email: "team@example.com" },
     },
   },
 ]
@@ -1050,7 +1050,7 @@ export class PostarcClient {
         this.identities.push({
           id: `id_${Date.now()}`,
           name: iData.name || "User",
-          email: iData.email || "user@agilique.com",
+          email: iData.email || "user@example.com",
           textSignature: iData.textSignature || "",
           htmlSignature: iData.htmlSignature || "",
           mayDelete: true,
@@ -1139,3 +1139,4 @@ export class PostarcClient {
 }
 
 export const postarcClient = new PostarcClient()
+

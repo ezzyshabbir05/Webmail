@@ -47,11 +47,11 @@ impl MailRepository {
 
     pub async fn seed_default_account(
         &self,
-        domain: &str,
+        admin_email: &str,
         default_password: &str,
     ) -> Result<Account, Box<dyn std::error::Error>> {
-        let email = format!("admin@{}", domain);
-        let username = format!("admin@{}", domain);
+        let email = admin_email.to_lowercase();
+        let username = admin_email.to_string();
 
         if let Some(existing) = self.get_account_by_email(&email).await? {
             return Ok(existing);

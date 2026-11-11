@@ -27,9 +27,11 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      - DATABASE_URL=postgres://postarc:secret@postgres:5432/postarc
-      - MAIL_DOMAIN=agilique.com
-      - MAIL_HOSTNAME=mail.agilique.com
+      - DATABASE_URL=postgres://${POSTGRES_USER:-postarc}:${POSTGRES_PASSWORD:-secret}@postgres:5432/${POSTGRES_DB:-postarc}
+      - MAIL_DOMAIN=${MAIL_DOMAIN:-localhost}
+      - MAIL_HOSTNAME=${MAIL_HOSTNAME:-localhost}
+      - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@localhost}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
       - STORAGE_BACKEND=fs
       - STORAGE_FS_PATH=/data/blobs
       - SMTP_BIND_ADDR=0.0.0.0:25
