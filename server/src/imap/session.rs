@@ -1,11 +1,14 @@
 use crate::auth::argon::verify_password;
-use crate::db::{Account, FlagUpdates, MailRepository, Mailbox};
-use crate::event_bus::{EventBus, MailboxEventType};
+use crate::db::{Account, FlagUpdates, MailRepository, Mailbox, NewIncomingMessage};
+use crate::event_bus::{EventBus, MailboxEvent, MailboxEventType};
 use crate::storage::BlobStorage;
 use crate::tls::TlsManager;
+use mail_parser::MessageParser;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
-use tracing::debug;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
+use tracing::{debug, error, info};
+use uuid::Uuid;
 
 #[allow(dead_code)]
 pub struct ImapState {
@@ -28,7 +31,7 @@ where
 
     // Initial IMAP greeting
     writer
-        .write_all(b"* OK [CAPABILITY IMAP4rev2 IMAP4rev1 IDLE MOVE SPECIAL-USE NAMESPACE] Postarc IMAP Service ready\r\n")
+        .write_all(b"* OK [CAPABILITY IMAP4rev2 IMAP4rev1 IDLE MOVE SPECIAL-USE NAMESPACE UIDPLUS] Postarc IMAP Service ready\r\n")
         .await?;
 
     let mut authenticated_account: Option<Account> = None;
@@ -49,7 +52,7 @@ where
         match command.as_str() {
             "CAPABILITY" => {
                 writer
-                    .write_all(b"* CAPABILITY IMAP4rev2 IMAP4rev1 IDLE MOVE SPECIAL-USE NAMESPACE\r\n")
+                    .write_all(b"* CAPABILITY IMAP4rev2 IMAP4rev1 IDLE MOVE SPECIAL-USE NAMESPACE UIDPLUS\r\n")
                     .await?;
                 writer
                     .write_all(format!("{} OK CAPABILITY completed\r\n", tag).as_bytes())
@@ -77,7 +80,7 @@ where
                     Ok(Some(acc)) if verify_password(&pass, &acc.password_hash) => {
                         authenticated_account = Some(acc);
                         writer
-                            .write_all(format!("{} OK [CAPABILITY IMAP4rev2] Logged in\r\n", tag).as_bytes())
+                            .write_all(format!("{} OK [CAPABILITY IMAP4rev2 IMAP4rev1 IDLE MOVE SPECIAL-USE NAMESPACE UIDPLUS] Logged in\r\n", tag).as_bytes())
                             .await?;
                     }
                     _ => {
@@ -381,6 +384,212 @@ where
                     writer.write_all(format!("{} OK SEARCH completed\r\n", tag).as_bytes()).await?;
                 } else {
                     writer.write_all(format!("{} OK completed\r\n", tag).as_bytes()).await?;
+                }
+            }
+            "APPEND" => {
+                let acc = match &authenticated_account {
+                    Some(a) => a.clone(),
+                    None => {
+                        writer.write_all(format!("{} BAD Not authenticated\r\n", tag).as_bytes()).await?;
+                        continue;
+                    }
+                };
+
+                let Some(brace_open) = trimmed.rfind('{') else {
+                    writer.write_all(format!("{} BAD APPEND requires literal message data\r\n", tag).as_bytes()).await?;
+                    continue;
+                };
+                let Some(brace_close) = trimmed.rfind('}') else {
+                    writer.write_all(format!("{} BAD Malformed literal size\r\n", tag).as_bytes()).await?;
+                    continue;
+                };
+                if brace_close <= brace_open {
+                    writer.write_all(format!("{} BAD Malformed literal size\r\n", tag).as_bytes()).await?;
+                    continue;
+                }
+                let size_str = &trimmed[brace_open + 1..brace_close];
+                let literal_size = match size_str.parse::<usize>() {
+                    Ok(s) => s,
+                    Err(_) => {
+                        writer.write_all(format!("{} BAD Invalid literal size\r\n", tag).as_bytes()).await?;
+                        continue;
+                    }
+                };
+
+                if literal_size > 50 * 1024 * 1024 {
+                    writer.write_all(format!("{} NO [TOOBIG] Message exceeds 50MB maximum size\r\n", tag).as_bytes()).await?;
+                    continue;
+                }
+
+                // Extract mailbox name and optional flags from prefix
+                let prefix = trimmed[..brace_open].trim();
+                let rest = prefix.strip_prefix(tag).unwrap_or(prefix).trim();
+                let rest = if rest.to_uppercase().starts_with("APPEND") {
+                    rest[6..].trim()
+                } else {
+                    rest
+                };
+
+                let (mb_token, after_mb) = if rest.starts_with('"') {
+                    if let Some(end_quote) = rest[1..].find('"') {
+                        (&rest[1..1 + end_quote], rest[1 + end_quote + 1..].trim())
+                    } else {
+                        (rest.trim_matches('"'), "")
+                    }
+                } else {
+                    let mut s = rest.splitn(2, char::is_whitespace);
+                    (s.next().unwrap_or(""), s.next().unwrap_or("").trim())
+                };
+
+                let mb_name = clean_param(mb_token);
+
+                let mut is_unread = true;
+                let mut is_flagged = false;
+                let mut is_draft = false;
+                let mut keywords = Vec::new();
+
+                if let (Some(f_start), Some(f_end)) = (after_mb.find('('), after_mb.find(')')) {
+                    if f_end > f_start {
+                        let flags_str = &after_mb[f_start + 1..f_end];
+                        for f in flags_str.split_whitespace() {
+                            let f_upper = f.to_uppercase();
+                            if f_upper.contains("SEEN") {
+                                is_unread = false;
+                                keywords.push("$seen".to_string());
+                            }
+                            if f_upper.contains("FLAGGED") {
+                                is_flagged = true;
+                                keywords.push("$flagged".to_string());
+                            }
+                            if f_upper.contains("DRAFT") {
+                                is_draft = true;
+                                keywords.push("$draft".to_string());
+                            }
+                            if f_upper.contains("ANSWERED") {
+                                keywords.push("$answered".to_string());
+                            }
+                            if f_upper.contains("DELETED") {
+                                keywords.push("$deleted".to_string());
+                            }
+                        }
+                    }
+                }
+
+                // Look up target mailbox
+                let mailboxes = state.repo.list_mailboxes(acc.id).await.unwrap_or_default();
+                let found_mb = mailboxes.into_iter().find(|m| {
+                    m.name.eq_ignore_ascii_case(&mb_name)
+                        || (mb_name.eq_ignore_ascii_case("INBOX") && m.role.as_deref() == Some("inbox"))
+                        || (mb_name.eq_ignore_ascii_case("Sent") && m.role.as_deref() == Some("sent"))
+                        || (mb_name.eq_ignore_ascii_case("Drafts") && m.role.as_deref() == Some("drafts"))
+                        || (mb_name.eq_ignore_ascii_case("Trash") && m.role.as_deref() == Some("trash"))
+                        || (mb_name.eq_ignore_ascii_case("Spam") && m.role.as_deref() == Some("spam"))
+                });
+
+                let Some(dest_mb) = found_mb else {
+                    writer.write_all(format!("{} NO [TRYCREATE] Mailbox '{}' does not exist\r\n", tag, mb_name).as_bytes()).await?;
+                    continue;
+                };
+
+                // Ready continuation response
+                writer.write_all(b"+ Ready for literal data\r\n").await?;
+                writer.flush().await?;
+
+                let mut payload = vec![0u8; literal_size];
+                if let Err(e) = lines.get_mut().read_exact(&mut payload).await {
+                    error!("Error reading APPEND literal payload: {}", e);
+                    writer.write_all(format!("{} NO APPEND failed reading data\r\n", tag).as_bytes()).await?;
+                    continue;
+                }
+
+                let parsed = MessageParser::default().parse(&payload);
+                let rfc822_id = parsed.as_ref().and_then(|p| p.message_id()).unwrap_or("").trim().to_string();
+
+                // Idempotent Deduplication: Check if Message-ID already exists in this mailbox
+                if !rfc822_id.is_empty() {
+                    if let Ok(Some(existing_uid)) = state.repo.find_message_uid_by_rfc822_id(acc.id, dest_mb.id, &rfc822_id).await {
+                        info!("Deduplicated APPEND for Message-ID: {} in {} (UID: {})", rfc822_id, dest_mb.name, existing_uid);
+                        writer.write_all(format!("{} OK [APPENDUID {} {}] APPEND completed\r\n", tag, dest_mb.uid_validity, existing_uid).as_bytes()).await?;
+                        continue;
+                    }
+                }
+
+                let mut hasher = Sha256::new();
+                hasher.update(&payload);
+                let blob_id = hex::encode(hasher.finalize());
+
+                let _ = state.storage.put_blob(&blob_id, &payload).await;
+                let _ = state.repo.reserve_blob(&blob_id, payload.len() as i64, payload.len() as i64, "zstd").await;
+
+                let subject = parsed.as_ref().and_then(|p| p.subject()).unwrap_or("(No Subject)").to_string();
+                let snippet = parsed.as_ref().and_then(|p| p.body_text(0)).map(|s| s.chars().take(150).collect::<String>()).unwrap_or_default();
+                let from_addr = parsed.as_ref().and_then(|p| p.from()).and_then(|f| f.first()).and_then(|a| a.address()).unwrap_or(&acc.email).to_string();
+                let from_name = parsed.as_ref().and_then(|p| p.from()).and_then(|f| f.first()).and_then(|a| a.name()).map(|s| s.to_string()).unwrap_or_default();
+                let to_addresses = parsed.as_ref().and_then(|p| p.to()).map(|list| list.iter().filter_map(|a| a.address()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+                let has_attachments = parsed.as_ref().map(|p| p.attachment_count() > 0).unwrap_or(false);
+
+                let in_reply_to = parsed.as_ref().map(|p| match p.in_reply_to() {
+                    mail_parser::HeaderValue::Text(t) => t.to_string(),
+                    mail_parser::HeaderValue::TextList(l) => l.first().map(|s| s.to_string()).unwrap_or_default(),
+                    _ => String::new(),
+                }).unwrap_or_default();
+
+                let mut references = Vec::new();
+                if let Some(ref p) = parsed {
+                    match p.references() {
+                        mail_parser::HeaderValue::Text(t) => references.push(t.to_string()),
+                        mail_parser::HeaderValue::TextList(l) => {
+                            for r in l {
+                                references.push(r.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                let date = parsed.as_ref().and_then(|p| p.date()).and_then(|d| chrono::DateTime::from_timestamp(d.to_timestamp(), 0)).unwrap_or_else(chrono::Utc::now);
+
+                let incoming = NewIncomingMessage {
+                    account_id: acc.id,
+                    mailbox_id: dest_mb.id,
+                    blob_id,
+                    rfc822_message_id: if rfc822_id.is_empty() { format!("<{}@{}>", Uuid::new_v4(), state.hostname) } else { rfc822_id },
+                    in_reply_to,
+                    references,
+                    subject,
+                    from_address: from_addr,
+                    from_name,
+                    to_addresses,
+                    cc_addresses: None,
+                    bcc_addresses: None,
+                    reply_to: None,
+                    date,
+                    size_bytes: payload.len() as i64,
+                    snippet,
+                    has_attachments,
+                    is_unread,
+                    is_flagged,
+                    is_draft,
+                    keywords,
+                };
+
+                match state.repo.insert_message_with_junction(incoming).await {
+                    Ok((inserted_msg, junction)) => {
+                        state.event_bus.publish(MailboxEvent {
+                            account_id: acc.id,
+                            mailbox_id: dest_mb.id,
+                            event_type: MailboxEventType::Created,
+                            uid: junction.uid,
+                            modseq: junction.modseq,
+                        });
+
+                        writer.write_all(format!("{} OK [APPENDUID {} {}] APPEND completed\r\n", tag, dest_mb.uid_validity, junction.uid).as_bytes()).await?;
+                        info!("APPEND completed: msg [{}] UID {} into {}", inserted_msg.id, junction.uid, dest_mb.name);
+                    }
+                    Err(e) => {
+                        error!("Database error inserting APPEND message: {}", e);
+                        writer.write_all(format!("{} NO Database error inserting message\r\n", tag).as_bytes()).await?;
+                    }
                 }
             }
             "EXPUNGE" => {

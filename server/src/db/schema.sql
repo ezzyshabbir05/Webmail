@@ -114,6 +114,7 @@ CREATE INDEX IF NOT EXISTS idx_mm_modseq ON message_mailboxes(mailbox_id, modseq
 CREATE INDEX IF NOT EXISTS idx_messages_tsv ON messages USING GIN(tsv);
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(account_id, thread_id);
 CREATE INDEX IF NOT EXISTS idx_messages_date ON messages(account_id, date DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_account_rfc822 ON messages(account_id, rfc822_message_id);
 
 -- 8. Outbound Queue
 CREATE TABLE IF NOT EXISTS outbound_queue (

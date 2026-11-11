@@ -120,9 +120,11 @@ Server Status: Running ✓ | Domain: yourdomain.com | Host: mail.yourdomain.com 
  11) View Live Mail Daemon Logs
  12) Restart Mailserver Services
  13) Update Postarc (Git Pull & Zero-Downtime Rebuild)
+ 14) Create Full Backup (Database & Blobs)
+ 15) Restore Mailserver from Backup
   0) Exit to Shell
 --------------------------------------------------------------------------------
-Select an option [0-13]:
+Select an option [0-15]:
 ```
 
 > [!TIP]
@@ -238,6 +240,51 @@ postarc cert status
 # Renew existing Let's Encrypt certificates
 postarc cert renew
 ```
+
+### 7. One-Click Backup & Cloud Replication
+```bash
+# Create full compressed backup of PostgreSQL database, blobs, DKIM keys, and .env
+postarc backup
+
+# Create backup and replicate to configured Cloudflare R2 / AWS S3 bucket
+postarc backup --s3
+
+# Restore mailserver interactively from available backups
+postarc restore
+
+# Restore mailserver directly from a specific backup archive
+postarc restore data/backups/postarc-backup-20261111_180000.tar.gz
+```
+
+---
+
+## Inbound Spam & Phishing Defense
+
+Postarc includes a native, asynchronous security engine that protects Port 25 inbound mail without requiring external heavyweight scanning daemons:
+
+1. **Real-time DNSBL IP Reputation**:
+   - Queries high-reputation blacklists: **Spamhaus ZEN** (SBL, CSS, XBL, PBL), **Barracuda BRBL**, and **SpamCop**.
+   - Immediate detection and classification of botnets, open relays, and abusive IP ranges.
+2. **Inbound SPF (`v=spf1`) Validation**:
+   - Asynchronously queries the sender domain's SPF record.
+   - Evaluates `ip4`, `ip6`, `a`, `mx`, `include`, and `redirect` mechanisms with CIDR bitwise matching.
+   - Returns RFC 7208 compliant results (`Pass`, `SoftFail`, `Fail`, `Neutral`, `None`).
+3. **DMARC Policy Enforcement (`v=DMARC1`)**:
+   - Queries `_dmarc.<domain>` for alignment and policy requirements.
+   - Enforces `p=quarantine` and `p=reject` when inbound SPF checks fail.
+4. **Automated Mailbox Routing**:
+   - Messages classified as spam are automatically routed to the user's `Spam` mailbox (`role = "spam"`).
+   - Inboxes remain clean and safe from phishing attempts.
+   - Standard RFC 8601 compliance headers (`Authentication-Results`, `X-Spam-Status`, `X-Spam-Flag`) are prepended to the email.
+
+---
+
+## IMAP Protocol Completeness & Deduplication
+
+Postarc implements the RFC 3501 and RFC 4315 (`UIDPLUS`) standards, including full support for **IMAP `APPEND`**:
+
+- **Draft & Migration Support**: Mail clients can upload drafts, sent messages, or migrate historical emails directly via standard IMAP `APPEND`.
+- **Intelligent Deduplication**: When clients like **Mozilla Thunderbird**, **Apple Mail**, or **Android Mail** send an email via SMTP, Postarc automatically saves an authoritative copy in the user's `Sent` folder. If the mail client also attempts an `APPEND` to `Sent`, Postarc inspects the `Message-ID` header and returns `[APPENDUID]` without creating a duplicate message. Users will never see double-sent emails.
 
 ---
 

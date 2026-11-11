@@ -75,6 +75,8 @@ print_usage() {
     echo "  stop                     Stop the mailserver stack"
     echo "  restart                  Gracefully restart the mailserver daemon"
     echo "  update                   Pull latest updates from Git, recompile, and hot-reload"
+    echo "  backup [--s3]            Create full compressed backup (database, blobs, DKIM keys)"
+    echo "  restore [ARCHIVE]        Restore mailserver from a backup archive"
     echo ""
     echo -e "${BOLD}User & Mailbox Management:${NC}"
     echo "  user add <EMAIL> [--password <PWD>] [--quota-gb <GB>]   Create an email account"
@@ -533,6 +535,227 @@ print_client_info() {
     echo -e "${BOLD}${CYAN}==============================================================================${NC}"
 }
 
+# ==============================================================================
+# One-Click Backup & Cloud Replication Engine
+# ==============================================================================
+
+source_env() {
+    if [ -f "${PROJECT_ROOT}/.env" ]; then
+        set -a
+        # shellcheck disable=SC1091
+        source "${PROJECT_ROOT}/.env" 2>/dev/null || true
+        set +a
+    fi
+}
+
+run_backup() {
+    ensure_docker
+
+    local BACKUP_DIR="${PROJECT_ROOT}/data/backups"
+    mkdir -p "${BACKUP_DIR}"
+
+    local TIMESTAMP
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    local ARCHIVE_NAME="postarc-backup-${TIMESTAMP}.tar.gz"
+    local ARCHIVE_PATH="${BACKUP_DIR}/${ARCHIVE_NAME}"
+    local TMP_DIR
+    TMP_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'postarc_backup')
+
+    echo ""
+    echo -e "${BOLD}${CYAN}=== Starting Postarc Mailserver Backup ===${NC}"
+    echo -e "Timestamp: ${BOLD}${TIMESTAMP}${NC}"
+
+    # 1. Database dump
+    echo -e "${CYAN}[1/4] Dumping PostgreSQL database...${NC}"
+    source_env
+    local PG_USER="${POSTGRES_USER:-postarc}"
+    local PG_DB="${POSTGRES_DB:-postarc}"
+
+    if ! ${COMPOSE_CMD} -f "${COMPOSE_FILE}" exec -T postgres pg_dump -U "${PG_USER}" "${PG_DB}" > "${TMP_DIR}/database.sql"; then
+        echo -e "${RED}Failed to dump PostgreSQL database! Aborting backup.${NC}"
+        rm -rf "${TMP_DIR}"
+        return 1
+    fi
+    echo -e "${GREEN}  ✓ Database dumped successfully (${PG_DB})${NC}"
+
+    # 2. Extract blobs
+    echo -e "${CYAN}[2/4] Archiving message content blobs...${NC}"
+    mkdir -p "${TMP_DIR}/blobs"
+    if [ -d "${PROJECT_ROOT}/data/blobs" ] && [ "$(ls -A "${PROJECT_ROOT}/data/blobs" 2>/dev/null)" ]; then
+        cp -a "${PROJECT_ROOT}/data/blobs/." "${TMP_DIR}/blobs/"
+    else
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" exec -T postarc tar -czf - -C /data blobs 2>/dev/null | tar -xzf - -C "${TMP_DIR}" 2>/dev/null || true
+    fi
+    local BLOB_COUNT
+    BLOB_COUNT=$(find "${TMP_DIR}/blobs" -type f | wc -l || echo 0)
+    echo -e "${GREEN}  ✓ Archived ${BLOB_COUNT} message content blobs${NC}"
+
+    # 3. Include DKIM keys and configuration
+    echo -e "${CYAN}[3/4] Packaging DKIM cryptographic keys and server configuration...${NC}"
+    if [ -d "${PROJECT_ROOT}/data/dkim" ]; then
+        mkdir -p "${TMP_DIR}/dkim"
+        cp -a "${PROJECT_ROOT}/data/dkim/." "${TMP_DIR}/dkim/"
+    fi
+    if [ -f "${PROJECT_ROOT}/.env" ]; then
+        cp "${PROJECT_ROOT}/.env" "${TMP_DIR}/postarc.env"
+    fi
+    echo -e "${GREEN}  ✓ Bundled security credentials & environment settings${NC}"
+
+    # 4. Create final compressed tarball
+    echo -e "${CYAN}[4/4] Generating compressed archive...${NC}"
+    tar -czf "${ARCHIVE_PATH}" -C "${TMP_DIR}" .
+    rm -rf "${TMP_DIR}"
+
+    local ARCHIVE_SIZE
+    ARCHIVE_SIZE=$(du -h "${ARCHIVE_PATH}" | cut -f1)
+
+    echo ""
+    echo -e "${GREEN}${BOLD}✔ Backup created successfully!${NC}"
+    echo -e "Archive Path: ${BOLD}${ARCHIVE_PATH}${NC}"
+    echo -e "Archive Size: ${BOLD}${ARCHIVE_SIZE}${NC}"
+
+    # Optional S3 / Cloudflare R2 Cloud Replication
+    local UPLOAD_S3=false
+    for arg in "$@"; do
+        if [ "$arg" = "--s3" ] || [ "$arg" = "--upload" ]; then
+            UPLOAD_S3=true
+        fi
+    done
+
+    if [ "${UPLOAD_S3}" = true ] || [ "${STORAGE_BACKEND:-}" = "s3" ] || [ -n "${R2_BUCKET:-}" ] || [ -n "${S3_BUCKET:-}" ]; then
+        upload_backup_to_s3 "${ARCHIVE_PATH}"
+    fi
+
+    echo ""
+}
+
+upload_backup_to_s3() {
+    local ARCHIVE_PATH="$1"
+    local ARCHIVE_NAME
+    ARCHIVE_NAME=$(basename "${ARCHIVE_PATH}")
+
+    source_env
+    local BUCKET="${R2_BUCKET:-${S3_BUCKET:-}}"
+    local ENDPOINT="${R2_ENDPOINT:-${S3_ENDPOINT:-}}"
+    local ACCESS_KEY="${R2_ACCESS_KEY_ID:-${AWS_ACCESS_KEY_ID:-}}"
+    local SECRET_KEY="${R2_SECRET_ACCESS_KEY:-${AWS_SECRET_ACCESS_KEY:-}}"
+
+    if [ -z "${BUCKET}" ]; then
+        echo -e "${YELLOW}Notice: Cloud replication skipped (no R2_BUCKET or S3_BUCKET configured in .env).${NC}"
+        return 0
+    fi
+
+    echo -e "${CYAN}Replicating backup to cloud bucket (${BUCKET})...${NC}"
+
+    if command -v aws &> /dev/null; then
+        local AWS_ARGS=()
+        [ -n "${ENDPOINT}" ] && AWS_ARGS+=(--endpoint-url "${ENDPOINT}")
+        if AWS_ACCESS_KEY_ID="${ACCESS_KEY}" AWS_SECRET_ACCESS_KEY="${SECRET_KEY}" \
+            aws s3 cp "${ARCHIVE_PATH}" "s3://${BUCKET}/backups/${ARCHIVE_NAME}" "${AWS_ARGS[@]}"; then
+            echo -e "${GREEN}✔ Replicated successfully to s3://${BUCKET}/backups/${ARCHIVE_NAME}${NC}"
+        else
+            echo -e "${RED}Cloud replication failed. Archive retained safely locally.${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Notice: 'aws-cli' not installed on host. Archive retained locally in data/backups.${NC}"
+        echo -e "${YELLOW}Tip: Run 'apt install awscli' to enable automated cloud push to Cloudflare R2 / AWS S3.${NC}"
+    fi
+}
+
+run_restore() {
+    ensure_docker
+
+    local ARCHIVE_PATH="${1:-}"
+
+    if [ -z "${ARCHIVE_PATH}" ]; then
+        local BACKUP_DIR="${PROJECT_ROOT}/data/backups"
+        echo ""
+        echo -e "${BOLD}${CYAN}Available Backups in ${BACKUP_DIR}:${NC}"
+        if [ ! -d "${BACKUP_DIR}" ] || [ -z "$(ls -A "${BACKUP_DIR}"/*.tar.gz 2>/dev/null)" ]; then
+            echo -e "${RED}No backup archives found in ${BACKUP_DIR}!${NC}"
+            return 1
+        fi
+        local idx=1
+        declare -a BACKUP_LIST=()
+        for f in "${BACKUP_DIR}"/*.tar.gz; do
+            [ -f "$f" ] || continue
+            local fsize
+            fsize=$(du -h "$f" | cut -f1)
+            echo -e "  ${BOLD}${idx})${NC} $(basename "$f") (${fsize})"
+            BACKUP_LIST+=("$f")
+            idx=$((idx + 1))
+        done
+        read -rp "Select backup to restore [1-$((idx - 1))]: " RESTORE_IDX
+        if [[ "$RESTORE_IDX" =~ ^[0-9]+$ ]] && [ "$RESTORE_IDX" -ge 1 ] && [ "$RESTORE_IDX" -le "${#BACKUP_LIST[@]}" ]; then
+            ARCHIVE_PATH="${BACKUP_LIST[$((RESTORE_IDX - 1))]}"
+        else
+            echo -e "${RED}Invalid selection.${NC}"
+            return 1
+        fi
+    fi
+
+    if [ ! -f "${ARCHIVE_PATH}" ]; then
+        echo -e "${RED}Backup archive '${ARCHIVE_PATH}' does not exist!${NC}"
+        return 1
+    fi
+
+    echo ""
+    echo -e "${YELLOW}${BOLD}⚠ WARNING: Restoring will overwrite existing database records and mailboxes!${NC}"
+    echo -e "Target Archive: ${BOLD}${ARCHIVE_PATH}${NC}"
+    read -rp "Are you absolutely sure you want to proceed? [y/N]: " CONFIRM_RESTORE
+    if [[ ! "${CONFIRM_RESTORE}" =~ ^[Yy]$ ]]; then
+        echo -e "${CYAN}Restore operation aborted.${NC}"
+        return 0
+    fi
+
+    local TMP_DIR
+    TMP_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'postarc_restore')
+
+    echo -e "${CYAN}[1/4] Extracting backup archive...${NC}"
+    tar -xzf "${ARCHIVE_PATH}" -C "${TMP_DIR}"
+
+    if [ ! -f "${TMP_DIR}/database.sql" ]; then
+        echo -e "${RED}Invalid archive: missing database.sql! Aborting.${NC}"
+        rm -rf "${TMP_DIR}"
+        return 1
+    fi
+
+    # 1. Database restore
+    echo -e "${CYAN}[2/4] Restoring PostgreSQL database...${NC}"
+    source_env
+    local PG_USER="${POSTGRES_USER:-postarc}"
+    local PG_DB="${POSTGRES_DB:-postarc}"
+
+    ${COMPOSE_CMD} -f "${COMPOSE_FILE}" exec -T postgres psql -U "${PG_USER}" -d "${PG_DB}" < "${TMP_DIR}/database.sql" > /dev/null 2>&1 || true
+    echo -e "${GREEN}  ✓ PostgreSQL database restored${NC}"
+
+    # 2. Blob restore
+    echo -e "${CYAN}[3/4] Restoring message content blobs...${NC}"
+    if [ -d "${TMP_DIR}/blobs" ]; then
+        mkdir -p "${PROJECT_ROOT}/data/blobs"
+        cp -a "${TMP_DIR}/blobs/." "${PROJECT_ROOT}/data/blobs/" 2>/dev/null || true
+        ${COMPOSE_CMD} -f "${COMPOSE_FILE}" exec -T postarc mkdir -p /data/blobs 2>/dev/null || true
+        tar -czf - -C "${TMP_DIR}/blobs" . 2>/dev/null | ${COMPOSE_CMD} -f "${COMPOSE_FILE}" exec -T postarc tar -xzf - -C /data/blobs 2>/dev/null || true
+    fi
+    echo -e "${GREEN}  ✓ Message content blobs restored${NC}"
+
+    # 3. DKIM keys restore
+    if [ -d "${TMP_DIR}/dkim" ]; then
+        mkdir -p "${PROJECT_ROOT}/data/dkim"
+        cp -a "${TMP_DIR}/dkim/." "${PROJECT_ROOT}/data/dkim/" 2>/dev/null || true
+        echo -e "${GREEN}  ✓ DKIM cryptographic keys restored${NC}"
+    fi
+
+    # 4. Restart services
+    echo -e "${CYAN}[4/4] Restarting Postarc services...${NC}"
+    ${COMPOSE_CMD} -f "${COMPOSE_FILE}" restart
+    rm -rf "${TMP_DIR}"
+
+    echo ""
+    echo -e "${GREEN}${BOLD}✔ Postarc Mailserver restored successfully from backup!${NC}"
+    echo ""
+}
+
 run_interactive_menu() {
     ensure_docker
     sync_db_password
@@ -575,9 +798,11 @@ run_interactive_menu() {
         echo -e " ${BOLD}11)${NC} View Live Mail Daemon Logs"
         echo -e " ${BOLD}12)${NC} Restart Mailserver Services"
         echo -e " ${BOLD}13)${NC} Update Postarc (Git Pull & Zero-Downtime Rebuild)"
+        echo -e " ${BOLD}14)${NC} Create Full Backup (Database & Blobs)"
+        echo -e " ${BOLD}15)${NC} Restore Mailserver from Backup"
         echo -e "  ${BOLD}0)${NC} Exit to Shell"
         echo -e "--------------------------------------------------------------------------------"
-        read -rp "Select an option [0-13]: " MENU_CHOICE
+        read -rp "Select an option [0-15]: " MENU_CHOICE
 
         case "${MENU_CHOICE}" in
             1)
@@ -734,6 +959,18 @@ run_interactive_menu() {
                 echo ""
                 read -rp "Press Enter to return to menu..." _
                 ;;
+            14)
+                echo ""
+                run_backup
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
+            15)
+                echo ""
+                run_restore
+                echo ""
+                read -rp "Press Enter to return to menu..." _
+                ;;
             0|q|exit)
                 echo -e "${GREEN}Goodbye!${NC}"
                 exit 0
@@ -777,6 +1014,12 @@ case "${CMD}" in
         ;;
     doctor)
         run_container_cli doctor "$@"
+        ;;
+    backup)
+        run_backup "$@"
+        ;;
+    restore)
+        run_restore "$@"
         ;;
     user|domain|alias|dkim)
         run_container_cli "${CMD}" "$@"

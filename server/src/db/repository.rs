@@ -515,6 +515,36 @@ impl MailRepository {
         Uuid::new_v4()
     }
 
+    /// Looks up whether an email with the specified RFC822 Message-ID already exists in a given mailbox
+    pub async fn find_message_uid_by_rfc822_id(
+        &self,
+        account_id: Uuid,
+        mailbox_id: Uuid,
+        rfc822_message_id: &str,
+    ) -> Result<Option<i32>, sqlx::Error> {
+        let clean_id = rfc822_message_id.trim();
+        if clean_id.is_empty() {
+            return Ok(None);
+        }
+
+        let row: Option<(i32,)> = sqlx::query_as(
+            r#"
+            SELECT mm.uid
+            FROM messages m
+            JOIN message_mailboxes mm ON m.id = mm.message_id
+            WHERE m.account_id = $1 AND mm.mailbox_id = $2 AND m.rfc822_message_id = $3
+            LIMIT 1
+            "#,
+        )
+        .bind(account_id)
+        .bind(mailbox_id)
+        .bind(clean_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| r.0))
+    }
+
     /// Atomically inserts message metadata and message_mailboxes junction row
     pub async fn insert_message_with_junction(
         &self,

@@ -135,24 +135,24 @@ pub async fn process_inbound_mail(
         .map(|p| p.attachment_count() > 0)
         .unwrap_or(false);
 
-    // 3. Spam & Antivirus Policy (Rspamd)
-    let rspamd_url = std::env::var("RSPAMD_URL").unwrap_or_else(|_| "http://rspamd:11333".to_string());
-    let mut is_spam = false;
-    let mut auth_results_header = format!(
-        "Authentication-Results: {};\r\n    ip-rev=pass (client-ip={});\r\n",
-        hostname,
-        client_ip.map(|ip| ip.to_string()).unwrap_or_else(|| "127.0.0.1".to_string())
-    );
+    // 3. Inbound Spam & Phishing Defense (Native DNSBL + SPF + DMARC)
+    let spam_detector = crate::security::SpamDetector::new();
+    let spam_report = spam_detector.evaluate(client_ip, sender_envelope, &from_addr).await;
 
+    let mut is_spam = spam_report.is_spam;
+    let mut total_score = spam_report.score;
+
+    // Optional Rspamd integration if configured
+    let rspamd_url = std::env::var("RSPAMD_URL").unwrap_or_else(|_| "http://rspamd:11333".to_string());
     if let Some((action, score)) = check_rspamd(&rspamd_url, &from_addr, &clean_rcpt, payload).await {
+        total_score += score;
         if action == "reject" {
             warn!("Inbound email from {} rejected by spam policy (score: {:.1})", from_addr, score);
             return Err(format!("550 5.7.1 Message rejected by spam policy (score: {:.1})", score));
         } else if action == "add header" || action == "rewrite subject" || score >= 6.0 {
-            info!("Inbound email from {} marked as spam (action: {}, score: {:.1})", from_addr, action, score);
+            info!("Inbound email from {} marked as spam by rspamd (action: {}, score: {:.1})", from_addr, action, score);
             is_spam = true;
         }
-        auth_results_header.push_str(&format!("    rspamd={}; score={:.1};\r\n", action, score));
     }
 
     // 4. Determine final destination mailbox (Inbox vs Spam)
@@ -166,8 +166,9 @@ pub async fn process_inbound_mail(
         target_mailbox_id
     };
 
-    // 5. Prepend Authentication-Results header to payload
-    let mut enriched_payload = auth_results_header.into_bytes();
+    // 5. Prepend Standard RFC Compliance Headers (X-Spam-Status, Authentication-Results)
+    let header_bytes = spam_report.generate_headers(hostname, total_score, is_spam);
+    let mut enriched_payload = header_bytes;
     enriched_payload.extend_from_slice(payload);
 
     // 6. Content-Addressed Storage
