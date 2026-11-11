@@ -167,7 +167,7 @@ function mapJmapEmailToThread(
     name: att.name || "attachment",
     size: `${Math.round((att.size || 0) / 1024)} KB`,
     type: att.type?.includes("image") ? "image" : att.type?.includes("pdf") ? "pdf" : "document",
-    downloadUrl: `#`,
+    downloadUrl: `/api/blob/raw/${encodeURIComponent(att.blobId || att.partId || "")}/${encodeURIComponent(att.name || "attachment")}`,
   }))
 
   return {
@@ -407,6 +407,25 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
       }
     })
   }, [checkAuth, refreshMailbox])
+
+  useEffect(() => {
+    if (!isAuthenticated) return
+    if (typeof window === "undefined") return
+
+    const token = localStorage.getItem("postarc_token")
+    if (!token) return
+
+    const baseUrl = typeof window !== "undefined" ? window.location.origin : ""
+    const es = new EventSource(`${baseUrl}/api/events?token=${encodeURIComponent(token)}`)
+
+    es.addEventListener("state", () => {
+      refreshMailbox()
+    })
+
+    return () => {
+      es.close()
+    }
+  }, [isAuthenticated, refreshMailbox])
 
   const logout = async () => {
     if (typeof window !== "undefined") {

@@ -14,7 +14,7 @@ futures-util = "0.3"
 
 # TLS & Cryptography
 tokio-rustls = "0.26"
-rustls-pki-types = "1"
+rustls-pki-types = { version = "1", features = ["alloc", "pem", "std"] }
 rcgen = "0.13"
 
 # Web & HTTP (JMAP)

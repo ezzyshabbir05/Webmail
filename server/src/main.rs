@@ -6,6 +6,7 @@ mod imap;
 mod jmap;
 mod smtp;
 mod storage;
+mod tls;
 
 use config::PostarcConfig;
 use db::MailRepository;
@@ -71,6 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 storage.clone(),
                 event_bus.clone(),
                 config.hostname.clone(),
+                config.mail_domain.clone(),
             );
             info!("Outbound delivery queue worker active.");
 

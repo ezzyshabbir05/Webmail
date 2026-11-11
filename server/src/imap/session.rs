@@ -3,8 +3,7 @@ use crate::db::{Account, MailRepository, Mailbox};
 use crate::event_bus::{EventBus, MailboxEventType};
 use crate::storage::BlobStorage;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tracing::debug;
 
 pub struct ImapState {
@@ -14,11 +13,14 @@ pub struct ImapState {
     pub hostname: String,
 }
 
-pub async fn handle_imap_session(
-    stream: TcpStream,
+pub async fn handle_imap_session<S>(
+    stream: S,
     state: Arc<ImapState>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (reader, mut writer) = stream.into_split();
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let (reader, mut writer) = tokio::io::split(stream);
     let mut lines = BufReader::new(reader).lines();
 
     // Initial IMAP greeting

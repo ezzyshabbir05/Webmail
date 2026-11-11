@@ -2763,13 +2763,22 @@ export function WebmailClient() {
                                     size="md"
                                     color={getAttachmentTokenColor(att.name, att.type)}
                                     icon={<Download size={14} />}
-                                    onClick={() =>
-                                      downloadTextFile(
-                                        att.name,
-                                        `Attachment: ${att.name} (${att.size})`,
-                                        "application/octet-stream"
-                                      )
-                                    }
+                                    onClick={() => {
+                                      if (att.downloadUrl && att.downloadUrl !== "#") {
+                                        const link = document.createElement("a")
+                                        link.href = att.downloadUrl
+                                        link.download = att.name
+                                        document.body.appendChild(link)
+                                        link.click()
+                                        document.body.removeChild(link)
+                                      } else {
+                                        downloadTextFile(
+                                          att.name,
+                                          `Attachment: ${att.name} (${att.size})`,
+                                          "application/octet-stream"
+                                        )
+                                      }
+                                    }}
                                   />
                                 ))}
                               </HStack>

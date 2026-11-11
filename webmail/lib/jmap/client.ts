@@ -695,11 +695,28 @@ export class PostarcClient {
   }
 
   public async getQuota(): Promise<JmapQuota | null> {
+    try {
+      const live = (await this.fetchLiveJmap("Quota/get", {})) as { list?: JmapQuota[] } | null
+      if (live?.list && live.list.length > 0) {
+        this.quota = live.list[0]
+      }
+    } catch {
+      // offline fallback
+    }
     return { ...this.quota }
   }
 
   public async getCalendarEvents(): Promise<JmapCalendarEvent[]> {
     this.loadFromStorage()
+    try {
+      const live = (await this.fetchLiveJmap("CalendarEvent/get", {})) as { list?: JmapCalendarEvent[] } | null
+      if (live?.list) {
+        this.events = live.list
+        this.saveToStorage()
+      }
+    } catch {
+      // offline fallback
+    }
     return [...this.events]
   }
 
@@ -708,6 +725,11 @@ export class PostarcClient {
     update?: Record<string, Partial<JmapCalendarEvent>>
     destroy?: string[]
   }): Promise<void> {
+    try {
+      await this.fetchLiveJmap("CalendarEvent/set", params)
+    } catch {
+      // offline fallback
+    }
     if (params.create) {
       for (const [id, evData] of Object.entries(params.create)) {
         this.events.push({
@@ -729,6 +751,15 @@ export class PostarcClient {
 
   public async getContactCards(): Promise<JmapContactCard[]> {
     this.loadFromStorage()
+    try {
+      const live = (await this.fetchLiveJmap("ContactCard/get", {})) as { list?: JmapContactCard[] } | null
+      if (live?.list) {
+        this.contacts = live.list
+        this.saveToStorage()
+      }
+    } catch {
+      // offline fallback
+    }
     return [...this.contacts]
   }
 
@@ -737,6 +768,11 @@ export class PostarcClient {
     update?: Record<string, Partial<JmapContactCard>>
     destroy?: string[]
   }): Promise<void> {
+    try {
+      await this.fetchLiveJmap("ContactCard/set", params)
+    } catch {
+      // offline fallback
+    }
     if (params.create) {
       for (const [id, cData] of Object.entries(params.create)) {
         this.contacts.push({

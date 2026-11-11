@@ -9,7 +9,7 @@ use crate::event_bus::EventBus;
 use crate::storage::BlobStorage;
 use axum::{
     body::Bytes,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -167,6 +167,11 @@ async fn post_jmap(
             }
             "EmailSubmission/set" => handle_submission_set(&state.repo, account_id, args).await,
             "Identity/get" => handle_identity_get(&state.repo, account_id, args).await,
+            "CalendarEvent/get" => handle_calendar_event_get(&state.repo, account_id, args).await,
+            "CalendarEvent/set" => handle_calendar_event_set(&state.repo, account_id, args).await,
+            "ContactCard/get" => handle_contact_card_get(&state.repo, account_id, args).await,
+            "ContactCard/set" => handle_contact_card_set(&state.repo, account_id, args).await,
+            "Quota/get" => handle_quota_get(&state.repo, account_id, args).await,
             _ => {
                 method_responses.push((
                     format!("{}/error", name),
@@ -194,8 +199,28 @@ async fn post_jmap(
     .into_response()
 }
 
-async fn get_events(headers: HeaderMap, State(state): State<AppState>) -> Response {
-    let Some((account_id, _)) = authenticate_request(&headers, &state).await else {
+#[derive(Deserialize)]
+struct EventParams {
+    token: Option<String>,
+}
+
+async fn get_events(
+    headers: HeaderMap,
+    Query(params): Query<EventParams>,
+    State(state): State<AppState>,
+) -> Response {
+    let mut auth = authenticate_request(&headers, &state).await;
+    if auth.is_none() {
+        if let Some(ref t) = params.token {
+            if let Ok(claims) = verify_token(t, &state.jwt_secret) {
+                if let Ok(account_id) = Uuid::parse_str(&claims.sub) {
+                    auth = Some((account_id, claims.email));
+                }
+            }
+        }
+    }
+
+    let Some((account_id, _)) = auth else {
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "type": "urn:ietf:params:jmap:error:unauthorized", "status": 401 })),
@@ -214,7 +239,7 @@ async fn get_blob(
             let mut headers = HeaderMap::new();
             headers.insert(
                 header::CONTENT_DISPOSITION,
-                format!("inline; filename=\"{}\"", name).parse().unwrap(),
+                format!("attachment; filename=\"{}\"", name).parse().unwrap(),
             );
             headers.insert(header::CONTENT_TYPE, "application/octet-stream".parse().unwrap());
             (StatusCode::OK, headers, bytes).into_response()

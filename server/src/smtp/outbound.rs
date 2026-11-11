@@ -1,3 +1,4 @@
+use super::dkim::DkimManager;
 use crate::db::MailRepository;
 use crate::event_bus::EventBus;
 use crate::smtp::inbound::process_inbound_mail;
@@ -17,9 +18,11 @@ pub fn spawn_outbound_queue_worker(
     storage: Arc<dyn BlobStorage>,
     event_bus: EventBus,
     hostname: String,
+    mail_domain: String,
 ) {
     tokio::spawn(async move {
         let resolver = TokioAsyncResolver::tokio(ResolverConfig::google(), ResolverOpts::default());
+        let dkim_manager = Arc::new(DkimManager::new(mail_domain, "mail".to_string()));
         let mut interval = tokio::time::interval(Duration::from_secs(5));
 
         loop {
@@ -145,7 +148,8 @@ pub fn spawn_outbound_queue_worker(
                         mx_hosts.push(domain.to_string());
                     }
 
-                    // 4. Attempt SMTP delivery to candidate MX hosts
+                    // 4. Attempt SMTP delivery to candidate MX hosts with DKIM signing
+                    let dkim_signed_payload = dkim_manager.sign_message(&payload);
                     let mut delivery_success = false;
                     let mut last_error_msg = String::from("No MX servers reachable");
 
@@ -155,7 +159,7 @@ pub fn spawn_outbound_queue_worker(
 
                         match timeout(
                             Duration::from_secs(20),
-                            deliver_via_smtp(&target_addr, &hostname, &sender, &clean_rcpt, &payload),
+                            deliver_via_smtp(&target_addr, &hostname, &sender, &clean_rcpt, &dkim_signed_payload),
                         )
                         .await
                         {
