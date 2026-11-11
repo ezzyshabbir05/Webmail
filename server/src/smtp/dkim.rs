@@ -1,5 +1,8 @@
 use mail_auth::{
-    crypto::{RsaKey, Sha256},
+    common::{
+        crypto::{RsaKey, Sha256},
+        headers::HeaderWriter,
+    },
     dkim::DkimSigner,
 };
 use rustls_pki_types::{pem::PemObject, PrivateKeyDer};

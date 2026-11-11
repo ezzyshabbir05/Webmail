@@ -4,6 +4,5 @@ pub mod outbound;
 pub mod server;
 pub mod session;
 
-pub use dkim::DkimManager;
 pub use outbound::spawn_outbound_queue_worker;
 pub use server::run_smtp_listener;

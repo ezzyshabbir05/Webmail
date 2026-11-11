@@ -56,7 +56,7 @@ pub async fn handle_contact_card_set(
     args: Value,
 ) -> Result<Value, String> {
     let mut created = serde_json::Map::new();
-    let mut updated = serde_json::Map::new();
+    let updated = serde_json::Map::new();
     let mut destroyed = Vec::new();
 
     if let Some(create_map) = args.get("create").and_then(|v| v.as_object()) {
