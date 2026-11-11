@@ -113,6 +113,7 @@ interface MailContextType {
     attachments?: EmailAttachment[],
     identityId?: string
   ) => Promise<void>
+  uploadAttachment: (file: File) => Promise<{ blobId: string; size: number; type: string }>
   saveDraft: (to: string, subject: string, body: string, attachments?: EmailAttachment[]) => void
   setActiveCategory: (category: EmailCategory) => void
   setActiveFolder: (folder: EmailFolder) => void
@@ -298,6 +299,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
   const [cannedResponses, setCannedResponses] = useState<CannedResponse[]>([])
   const [contacts, setContacts] = useState<MailContact[]>([])
   const [customFolders, setCustomFolders] = useState<CustomMailboxFolder[]>([])
+  const [serverMailboxes, setServerMailboxes] = useState<JmapMailbox[]>([])
   const [allowedRemoteImages, setAllowedRemoteImages] = useState<Set<string>>(new Set())
 
   const [quotaInfo, setQuotaInfo] = useState<QuotaInfo>({
@@ -352,6 +354,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     try {
       // Fetch Mailboxes
       const mailboxes: JmapMailbox[] = await postarcClient.getMailboxes()
+      setServerMailboxes(mailboxes)
       const roleMap: Record<string, string> = {}
       for (const m of mailboxes) {
         if (m.role) {
@@ -479,33 +482,34 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
   }, [emails, activeEmailId])
 
   const unreadCounts = useMemo(() => {
+    const inboxMb = serverMailboxes.find((m) => m.role === "inbox")
+    const spamMb = serverMailboxes.find((m) => m.role === "spam")
+    const trashMb = serverMailboxes.find((m) => m.role === "trash")
+    const draftsMb = serverMailboxes.find((m) => m.role === "drafts")
+
     const counts = {
       primary: 0,
       promotions: 0,
       social: 0,
       updates: 0,
-      inbox: 0,
+      inbox: inboxMb?.unreadEmails ?? 0,
       starred: 0,
-      drafts: 0,
-      spam: 0,
-      trash: 0,
+      drafts: draftsMb?.totalEmails ?? 0,
+      spam: spamMb?.unreadEmails ?? 0,
+      trash: trashMb?.unreadEmails ?? 0,
     }
 
     emails.forEach((email) => {
       if (email.isUnread && email.folder === "inbox") {
-        counts.inbox++
         if (email.category in counts) {
           counts[email.category]++
         }
       }
       if (email.isStarred) counts.starred++
-      if (email.folder === "drafts") counts.drafts++
-      if (email.isUnread && email.folder === "spam") counts.spam++
-      if (email.isUnread && email.folder === "trash") counts.trash++
     })
 
     return counts
-  }, [emails])
+  }, [emails, serverMailboxes])
 
   const openEmail = (id: string) => {
     setActiveEmailId(id)
@@ -903,9 +907,17 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
   }
 
   const markAllAsRead = (targetFolder: EmailFolder = activeFolder) => {
+    const unreadInFolder = emails.filter((e) => e.folder === targetFolder && e.isUnread)
+    if (unreadInFolder.length === 0) {
+      toast({ body: `No unread messages in ${targetFolder}` })
+      return
+    }
     setEmails((prev) =>
       prev.map((e) => (e.folder === targetFolder ? { ...e, isUnread: false } : e))
     )
+    unreadInFolder.forEach((e) => {
+      postarcClient.setEmailProperties(e.id, { keywords: { $seen: true } }).catch(() => {})
+    })
     toast({ body: `All messages in ${targetFolder} marked as read` })
   }
 
@@ -1004,7 +1016,30 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
 
   const saveDraft = (to: string, subject: string, body: string, attachments?: EmailAttachment[]) => {
     if (!to && !subject && !body) return
-    toast({ body: "Draft saved" })
+    postarcClient
+      .saveDraft({
+        from: { name: activeIdentity.name, email: activeIdentity.email },
+        to: to ? [{ email: to }] : [],
+        subject: subject || "(Draft)",
+        body,
+        attachments: attachments?.map((a) => ({
+          blobId: a.id,
+          name: a.name,
+          type: "application/octet-stream",
+          size: 1024,
+        })),
+      })
+      .then(() => {
+        refreshMailbox()
+        toast({ body: "Draft saved to server" })
+      })
+      .catch(() => {
+        toast({ body: "Failed to save draft" })
+      })
+  }
+
+  const uploadAttachment = async (file: File) => {
+    return await postarcClient.uploadAttachment(file)
   }
 
   const createCustomFolder = (name: string, _color?: string) => {
@@ -1126,6 +1161,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
         clearComposeInitialData,
         refreshMailbox,
         sendEmail,
+        uploadAttachment,
         saveDraft,
         setActiveCategory,
         setActiveFolder,
