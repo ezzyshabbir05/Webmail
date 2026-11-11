@@ -4,15 +4,15 @@ services:
     container_name: postarc-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: postarc
-      POSTGRES_USER: postarc
-      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: ${POSTGRES_DB:-postarc}
+      POSTGRES_USER: ${POSTGRES_USER:-postarc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postarc -d postarc"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postarc} -d ${POSTGRES_DB:-postarc}"]
       interval: 3s
       timeout: 3s
       retries: 5

@@ -116,6 +116,21 @@ ensure_docker() {
     fi
 }
 
+sync_db_password() {
+    if [ -f .env ]; then
+        local db_pass
+        db_pass=$(grep "^POSTGRES_PASSWORD=" .env 2>/dev/null | cut -d '=' -f2- | tr -d '\r' || true)
+        local db_user
+        db_user=$(grep "^POSTGRES_USER=" .env 2>/dev/null | cut -d '=' -f2- | tr -d '\r' || echo "postarc")
+        local db_name
+        db_name=$(grep "^POSTGRES_DB=" .env 2>/dev/null | cut -d '=' -f2- | tr -d '\r' || echo "postarc")
+
+        if [ -n "${db_pass}" ] && ${COMPOSE_CMD} -f "${COMPOSE_FILE}" ps --status running 2>/dev/null | grep -q "postgres"; then
+            ${COMPOSE_CMD} -f "${COMPOSE_FILE}" exec -T postgres psql -U "${db_user}" -d "${db_name}" -c "ALTER USER ${db_user} WITH PASSWORD '${db_pass}';" >/dev/null 2>&1 || true
+        fi
+    fi
+}
+
 run_container_cli() {
     ensure_docker
     local flags
@@ -125,6 +140,7 @@ run_container_cli() {
         ${COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d
         sleep 2
     fi
+    sync_db_password
     ${COMPOSE_CMD} -f "${COMPOSE_FILE}" exec ${flags} postarc postarc "$@"
 }
 
@@ -240,6 +256,8 @@ run_setup_wizard() {
     echo -e "${CYAN}Building and launching Postarc containers...${NC}"
     ${COMPOSE_CMD} -f "${COMPOSE_FILE}" build
     ${COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d
+    sleep 2
+    sync_db_password
 
     # 7. Provision Default Domain & Admin User in Database
     echo -e "${CYAN}Provisioning domain '${MAIL_DOMAIN}' and admin '${ADMIN_EMAIL}' in database...${NC}"
@@ -482,6 +500,8 @@ case "${CMD}" in
         ensure_docker
         echo -e "${CYAN}Starting Postarc mailserver services...${NC}"
         ${COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d
+        sleep 2
+        sync_db_password
         echo -e "${GREEN}Postarc is running.${NC}"
         ;;
     stop)
@@ -494,6 +514,8 @@ case "${CMD}" in
         ensure_docker
         echo -e "${CYAN}Restarting Postarc mailserver services...${NC}"
         ${COMPOSE_CMD} -f "${COMPOSE_FILE}" up -d --force-recreate
+        sleep 2
+        sync_db_password
         echo -e "${GREEN}Postarc restarted successfully.${NC}"
         ;;
     update)
