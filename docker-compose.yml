@@ -55,6 +55,20 @@ services:
       - dkimdata:/data/dkim
       - ${LETSENCRYPT_DIR:-/etc/letsencrypt}:/etc/letsencrypt:ro
 
+  webmail:
+    build:
+      context: ./webmail
+      dockerfile: Dockerfile
+    container_name: postarc-webmail
+    restart: unless-stopped
+    ports:
+      - "${WEBMAIL_PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=production
+      - INTERNAL_BACKEND_URL=http://postarc-server:8080
+    depends_on:
+      - postarc
+
 volumes:
   pgdata:
   blobstorage:
