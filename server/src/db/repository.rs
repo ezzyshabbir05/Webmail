@@ -648,6 +648,34 @@ impl MailRepository {
         .await
     }
 
+    pub async fn list_messages_for_imap(
+        &self,
+        mailbox_id: Uuid,
+        limit: i64,
+    ) -> Result<Vec<EnrichedMessage>, sqlx::Error> {
+        sqlx::query_as::<_, EnrichedMessage>(
+            r#"
+            SELECT 
+                m.id, m.account_id, mm.mailbox_id, m.blob_id, m.thread_id,
+                mm.uid, mm.modseq, m.rfc822_message_id, m.in_reply_to,
+                m.subject, m.from_address, m.from_name, m.to_addresses,
+                m.cc_addresses, m.bcc_addresses, m.reply_to, m.date,
+                m.size_bytes, m.snippet, m.has_attachments,
+                mm.is_unread, mm.is_flagged, mm.is_draft, mm.is_answered,
+                mm.is_deleted, mm.keywords, m.created_at
+            FROM messages m
+            JOIN message_mailboxes mm ON mm.message_id = m.id
+            WHERE mm.mailbox_id = $1 AND mm.is_deleted = false
+            ORDER BY mm.uid ASC
+            LIMIT $2
+            "#,
+        )
+        .bind(mailbox_id)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await
+    }
+
     pub async fn get_message_by_uid(
         &self,
         mailbox_id: Uuid,

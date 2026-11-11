@@ -129,7 +129,7 @@ where
                     .find(|m| m.name.eq_ignore_ascii_case(&mb_name) || (mb_name.eq_ignore_ascii_case("INBOX") && m.role.as_deref() == Some("inbox")));
 
                 if let Some(mb) = found {
-                    let messages = state.repo.list_messages_in_mailbox(mb.id, 10000, 0).await.unwrap_or_default();
+                    let messages = state.repo.list_messages_for_imap(mb.id, 50000).await.unwrap_or_default();
                     let unseen_count = messages.iter().filter(|m| m.is_unread).count();
                     writer
                         .write_all(format!(
@@ -158,7 +158,7 @@ where
                     .find(|m| m.name.eq_ignore_ascii_case(&mb_name) || (mb_name.eq_ignore_ascii_case("INBOX") && m.role.as_deref() == Some("inbox")));
 
                 if let Some(mb) = found {
-                    let messages = state.repo.list_messages_in_mailbox(mb.id, 10000, 0).await.unwrap_or_default();
+                    let messages = state.repo.list_messages_for_imap(mb.id, 50000).await.unwrap_or_default();
                     let count = messages.len();
 
                     let res = format!(
@@ -186,10 +186,31 @@ where
                 };
 
                 if actual_cmd == "FETCH" {
-                    let messages = state.repo.list_messages_in_mailbox(mb.id, 100, 0).await.unwrap_or_default();
+                    let range_str = if is_uid_cmd {
+                        parts.get(3).unwrap_or(&"1:*")
+                    } else {
+                        parts.get(2).unwrap_or(&"1:*")
+                    };
+
+                    let messages = state.repo.list_messages_for_imap(mb.id, 50000).await.unwrap_or_default();
+                    let max_uid = messages.last().map(|m| m.uid).unwrap_or(0);
+                    let total_count = messages.len() as i32;
+
+                    let line_upper = trimmed.to_uppercase();
+                    let wants_body = line_upper.contains("BODY") || line_upper.contains("RFC822");
 
                     for (idx, msg) in messages.iter().enumerate() {
-                        let seq = idx + 1;
+                        let seq = (idx + 1) as i32;
+                        let in_range = if is_uid_cmd {
+                            matches_range(msg.uid, max_uid, range_str)
+                        } else {
+                            matches_range(seq, total_count, range_str)
+                        };
+
+                        if !in_range {
+                            continue;
+                        }
+
                         let mut flags_str = String::new();
                         if !msg.is_unread {
                             flags_str.push_str("\\Seen ");
@@ -208,8 +229,7 @@ where
                         }
                         let flags_trimmed = flags_str.trim();
 
-                        let line_upper = trimmed.to_uppercase();
-                        if line_upper.contains("BODY[]") || line_upper.contains("RFC822") {
+                        if wants_body {
                             if let Ok(body_bytes) = state.storage.get_blob(&msg.blob_id).await {
                                 let body_header = format!(
                                     "* {} FETCH (UID {} FLAGS ({}) RFC822.SIZE {} BODY[] {{{}}}\r\n",
@@ -218,6 +238,12 @@ where
                                 writer.write_all(body_header.as_bytes()).await?;
                                 writer.write_all(&body_bytes).await?;
                                 writer.write_all(b")\r\n").await?;
+
+                                if !line_upper.contains(".PEEK") && msg.is_unread {
+                                    let mut fu = FlagUpdates::default();
+                                    fu.is_unread = Some(false);
+                                    let _ = state.repo.update_message_flags(mb.id, msg.uid, fu).await;
+                                }
                                 continue;
                             }
                         }
@@ -244,9 +270,25 @@ where
                         flag_updates.is_deleted = Some(true);
                     }
 
-                    if is_uid_cmd && parts.len() > 3 {
-                        if let Ok(target_uid) = parts[3].parse::<i32>() {
-                            let _ = state.repo.update_message_flags(mb.id, target_uid, flag_updates).await;
+                    let range_arg = if is_uid_cmd {
+                        parts.get(3).unwrap_or(&"")
+                    } else {
+                        parts.get(2).unwrap_or(&"")
+                    };
+
+                    let messages = state.repo.list_messages_for_imap(mb.id, 50000).await.unwrap_or_default();
+                    let max_uid = messages.last().map(|m| m.uid).unwrap_or(0);
+                    let total_count = messages.len() as i32;
+
+                    for (idx, msg) in messages.iter().enumerate() {
+                        let seq = (idx + 1) as i32;
+                        let in_range = if is_uid_cmd {
+                            matches_range(msg.uid, max_uid, range_arg)
+                        } else {
+                            matches_range(seq, total_count, range_arg)
+                        };
+                        if in_range {
+                            let _ = state.repo.update_message_flags(mb.id, msg.uid, flag_updates.clone()).await;
                         }
                     }
                     writer.write_all(format!("{} OK STORE completed\r\n", tag).as_bytes()).await?;
@@ -275,7 +317,7 @@ where
                     }
                     writer.write_all(format!("{} OK EXPUNGE completed\r\n", tag).as_bytes()).await?;
                 } else if actual_cmd == "SEARCH" {
-                    let messages = state.repo.list_messages_in_mailbox(mb.id, 1000, 0).await.unwrap_or_default();
+                    let messages = state.repo.list_messages_for_imap(mb.id, 50000).await.unwrap_or_default();
                     let mut matched_ids = Vec::new();
                     let upper_line = trimmed.to_uppercase();
 
@@ -344,7 +386,7 @@ where
                             if let Ok(evt) = event_res {
                                 if evt.mailbox_id == mb.id {
                                     if evt.event_type == MailboxEventType::Created {
-                                        let current_count = state.repo.list_messages_in_mailbox(mb.id, 10000, 0).await.map(|m| m.len()).unwrap_or(1);
+                                        let current_count = state.repo.list_messages_for_imap(mb.id, 50000).await.map(|m| m.len()).unwrap_or(1);
                                         writer.write_all(format!("* {} EXISTS\r\n", current_count).as_bytes()).await?;
                                     }
                                 }
@@ -372,4 +414,35 @@ where
 
 fn clean_param(p: &str) -> String {
     p.trim_matches('"').to_string()
+}
+
+fn matches_range(val: i32, max_val: i32, range_spec: &str) -> bool {
+    let clean = range_spec.trim();
+    if clean.is_empty() || clean == "*" || clean == "1:*" {
+        return true;
+    }
+    for sub in clean.split(',') {
+        let sub = sub.trim();
+        if sub == "*" {
+            if val == max_val {
+                return true;
+            }
+        } else if let Some((start_s, end_s)) = sub.split_once(':') {
+            let start = start_s.trim().parse::<i32>().unwrap_or(1);
+            let end = if end_s.trim() == "*" {
+                max_val
+            } else {
+                end_s.trim().parse::<i32>().unwrap_or(max_val)
+            };
+            let (min, max) = if start <= end { (start, end) } else { (end, start) };
+            if val >= min && val <= max {
+                return true;
+            }
+        } else if let Ok(target) = sub.parse::<i32>() {
+            if val == target {
+                return true;
+            }
+        }
+    }
+    false
 }
