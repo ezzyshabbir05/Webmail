@@ -405,11 +405,20 @@ export class PostarcClient {
       const queryArgs: Record<string, unknown> = {
         limit: options.limit || 50,
         position: options.position || 0,
+        sort: [{ property: "receivedAt", isAscending: false }],
       }
-      if (options.mailboxId) {
+
+      if (options.mailboxId && options.searchQuery) {
+        queryArgs.filter = {
+          operator: "AND",
+          conditions: [
+            { inMailbox: options.mailboxId },
+            { text: options.searchQuery },
+          ],
+        }
+      } else if (options.mailboxId) {
         queryArgs.filter = { inMailbox: options.mailboxId }
-      }
-      if (options.searchQuery) {
+      } else if (options.searchQuery) {
         queryArgs.filter = { text: options.searchQuery }
       }
 
@@ -418,11 +427,43 @@ export class PostarcClient {
       } | null
       if (liveQuery) {
         if (Array.isArray(liveQuery.ids) && liveQuery.ids.length > 0) {
-          const liveGet = (await this.fetchLiveJmap("Email/get", { ids: liveQuery.ids })) as {
+          const liveGet = (await this.fetchLiveJmap("Email/get", {
+            ids: liveQuery.ids,
+            properties: [
+              "id",
+              "blobId",
+              "threadId",
+              "mailboxIds",
+              "keywords",
+              "size",
+              "receivedAt",
+              "sentAt",
+              "from",
+              "to",
+              "cc",
+              "bcc",
+              "replyTo",
+              "subject",
+              "preview",
+              "hasAttachment",
+              "headers",
+              "bodyValues",
+              "textBody",
+              "htmlBody",
+              "attachments",
+            ],
+            fetchTextBody: true,
+            fetchHTMLBody: true,
+            bodyProperties: ["partId", "blobId", "size", "name", "type", "charset", "cid"],
+          })) as {
             list?: JmapEmail[]
           } | null
           if (liveGet?.list) {
-            this.emails = liveGet.list
+            this.emails = liveGet.list.sort((a, b) => {
+              const timeA = new Date(a.receivedAt || a.sentAt || 0).getTime()
+              const timeB = new Date(b.receivedAt || b.sentAt || 0).getTime()
+              return timeB - timeA
+            })
             this.saveToStorage()
           }
         } else if (Array.isArray(liveQuery.ids) && liveQuery.ids.length === 0) {
@@ -454,6 +495,13 @@ export class PostarcClient {
           e.from?.[0]?.email.toLowerCase().includes(q)
       )
     }
+
+    // Always sort latest on top (by receivedAt or sentAt descending)
+    list.sort((a, b) => {
+      const timeA = new Date(a.receivedAt || a.sentAt || 0).getTime()
+      const timeB = new Date(b.receivedAt || b.sentAt || 0).getTime()
+      return timeB - timeA
+    })
 
     return {
       emails: list.slice(options.position || 0, (options.position || 0) + (options.limit || 100)),
@@ -515,6 +563,103 @@ export class PostarcClient {
     this.saveToStorage()
   }
 
+  public getBlobDownloadUrl(blobId: string, name: string): string {
+    return `/api/blob/${encodeURIComponent(blobId)}/${encodeURIComponent(name)}`
+  }
+
+  public async uploadAttachment(file: File): Promise<{ blobId: string; size: number; type: string }> {
+    const token = typeof window !== "undefined" ? localStorage.getItem("postarc_token") : null
+    const accountId = this.session?.primaryAccounts?.["urn:ietf:params:jmap:mail"] || "me"
+    try {
+      const res = await fetch(`/api/upload/${encodeURIComponent(accountId)}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": file.type || "application/octet-stream",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: file,
+      })
+      if (res.ok) {
+        const data = await res.json()
+        return {
+          blobId: data.blobId || data.id,
+          size: data.size || file.size,
+          type: data.type || file.type,
+        }
+      }
+    } catch (e) {
+      console.warn("Upload attachment fetch error:", e)
+    }
+
+    return {
+      blobId: `blob_${Date.now()}_${encodeURIComponent(file.name)}`,
+      size: file.size,
+      type: file.type || "application/octet-stream",
+    }
+  }
+
+  public async saveDraft(params: {
+    to?: string
+    subject?: string
+    body?: string
+    attachments?: { blobId: string; name: string; type: string; size: number }[]
+  }): Promise<string> {
+    const draftsMb = await this.getMailboxByRole("drafts")
+    const draftsMbId = draftsMb?.id || "drafts"
+    let draftId = `draft_${Date.now()}`
+
+    try {
+      const res = (await this.fetchLiveJmap("Email/set", {
+        create: {
+          d1: {
+            mailboxIds: { [draftsMbId]: true },
+            keywords: { $draft: true },
+            to: params.to ? [{ email: params.to }] : [],
+            subject: params.subject || "",
+            bodyValues: {
+              "1": { value: params.body || "" },
+            },
+            textBody: [{ partId: "1", type: "text/plain", size: (params.body || "").length }],
+            attachments: params.attachments?.map((a, i) => ({
+              partId: `att_${i}`,
+              blobId: a.blobId,
+              name: a.name,
+              type: a.type,
+              size: a.size,
+            })),
+          },
+        },
+      })) as { created?: Record<string, { id: string }> } | null
+
+      if (res?.created?.d1?.id) {
+        draftId = res.created.d1.id
+      }
+    } catch (e) {
+      console.warn("Failed to persist draft to JMAP:", e)
+    }
+
+    return draftId
+  }
+
+  public async markAllAsRead(folderRole: string = "inbox"): Promise<void> {
+    try {
+      const mb = await this.getMailboxByRole(folderRole)
+      const mbId = mb?.id || folderRole
+      const unreadEmails = this.emails.filter((e) => e.mailboxIds?.[mbId] && !e.keywords?.["$seen"])
+      if (unreadEmails.length > 0) {
+        const updates: Record<string, any> = {}
+        unreadEmails.forEach((e) => {
+          updates[e.id] = { "keywords/$seen": true }
+          if (e.keywords) e.keywords["$seen"] = true
+        })
+        await this.fetchLiveJmap("Email/set", { update: updates })
+        this.saveToStorage()
+      }
+    } catch (e) {
+      console.warn("markAllAsRead error:", e)
+    }
+  }
+
   public async sendEmail(params: {
     identityId: string
     from: { name?: string; email: string }
@@ -522,6 +667,8 @@ export class PostarcClient {
     cc?: { name?: string; email: string }[]
     bcc?: { name?: string; email: string }[]
     replyTo?: { name?: string; email: string }[]
+    inReplyTo?: string[]
+    references?: string[]
     subject: string
     body: string
     htmlBody?: string
@@ -534,7 +681,7 @@ export class PostarcClient {
     let submissionId = `sub_${Date.now()}`
 
     try {
-      // 1. Create email via JMAP Email/set
+      // 1. Create email via JMAP Email/set (include attachments, inReplyTo, references)
       const createRes = (await this.fetchLiveJmap("Email/set", {
         create: {
           temp1: {
@@ -543,6 +690,9 @@ export class PostarcClient {
             to: params.to,
             cc: params.cc || [],
             bcc: params.bcc || [],
+            replyTo: params.replyTo,
+            inReplyTo: params.inReplyTo,
+            references: params.references,
             subject: params.subject,
             bodyValues: {
               "1": {
@@ -550,6 +700,13 @@ export class PostarcClient {
               },
             },
             textBody: [{ partId: "1", type: params.htmlBody ? "text/html" : "text/plain", size: (params.htmlBody || params.body).length }],
+            attachments: params.attachments?.map((att, idx) => ({
+              partId: `att_${idx}`,
+              blobId: att.blobId,
+              size: att.size,
+              name: att.name,
+              type: att.type,
+            })),
           },
         },
       })) as { created?: Record<string, { id: string }> } | null
@@ -617,15 +774,6 @@ export class PostarcClient {
 
     this.saveToStorage()
     return { emailId, submissionId }
-  }
-
-  public async uploadAttachment(file: File): Promise<{ blobId: string; size: number; type: string }> {
-    const blobId = `blob_${Date.now()}_${encodeURIComponent(file.name)}`
-    return {
-      blobId,
-      size: file.size,
-      type: file.type || "application/octet-stream",
-    }
   }
 
   public async getIdentities(): Promise<JmapIdentity[]> {

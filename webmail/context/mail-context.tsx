@@ -61,6 +61,8 @@ interface MailContextType {
   allowRemoteImagesForEmail: (emailId: string) => void
   // Quota
   quotaInfo: QuotaInfo
+  // Upload attachment
+  uploadAttachment: (file: File) => Promise<{ blobId: string; size: number; type: string }>
   // Standard Actions
   openEmail: (id: string) => void
   closeEmail: () => void
@@ -81,6 +83,7 @@ interface MailContextType {
       mode?: "reply" | "reply_all" | "forward"
       to?: string
       cc?: string[]
+      bcc?: string[]
       attachments?: EmailAttachment[]
     }
   ) => void
@@ -252,6 +255,14 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [isComposeOpen, setIsComposeOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("")
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchQuery])
 
   const getInitialIdentity = (): MailIdentity => {
     if (typeof window !== "undefined") {
@@ -373,11 +384,17 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
 
       // Fetch Emails
       const { emails: jmapEmails } = await postarcClient.getEmails({
-        searchQuery: searchQuery || undefined,
+        searchQuery: debouncedSearchQuery || undefined,
         limit: 100,
       })
 
-      const mappedThreads = jmapEmails.map((e) => mapJmapEmailToThread(e, roleMap))
+      const mappedThreads = jmapEmails
+        .map((e) => mapJmapEmailToThread(e, roleMap))
+        .sort((a, b) => {
+          const timeA = new Date(a.isoDate || a.fullDate || 0).getTime()
+          const timeB = new Date(b.isoDate || b.fullDate || 0).getTime()
+          return timeB - timeA
+        })
       setEmails(mappedThreads)
 
       // Fetch Identities
@@ -433,7 +450,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       console.error("Failed to refresh mailbox from Postarc:", err)
     }
-  }, [searchQuery])
+  }, [debouncedSearchQuery])
 
   useEffect(() => {
     checkAuth().then((authed) => {
@@ -742,6 +759,9 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     if (activeEmailId && ids.includes(activeEmailId)) {
       setActiveEmailId(null)
     }
+    ids.forEach((id) => {
+      postarcClient.setEmailProperties(id, { mailboxIds: { snoozed: true } }).catch(() => {})
+    })
     toast({ body: `Snoozed until ${untilText}` })
   }
 
@@ -770,6 +790,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
       mode?: "reply" | "reply_all" | "forward"
       to?: string
       cc?: string[]
+      bcc?: string[]
       attachments?: EmailAttachment[]
     }
   ) => {
@@ -778,11 +799,31 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     const targetThread = emails.find((e) => e.id === threadId)
     const recipient = options?.to?.trim() || targetThread?.senderEmail || "recipient@example.com"
 
+    let combinedCc = options?.cc || []
+    if (options?.mode === "reply_all" && targetThread) {
+      const threadRecipients = [
+        targetThread.senderEmail,
+        targetThread.recipientEmail,
+        ...(targetThread.ccEmails || []),
+      ].filter(Boolean)
+      const distinctCc = Array.from(
+        new Set(
+          threadRecipients.filter(
+            (addr) =>
+              addr.toLowerCase() !== activeIdentity.email.toLowerCase() &&
+              addr.toLowerCase() !== recipient.toLowerCase()
+          )
+        )
+      )
+      combinedCc = distinctCc
+    }
+
     const newMessage: ThreadMessage = {
       id: `msg_reply_${Date.now()}`,
       senderName: activeIdentity.name,
       senderEmail: activeIdentity.email,
       recipientEmail: recipient,
+      ccEmails: combinedCc.length > 0 ? combinedCc : undefined,
       body: replyText,
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       fullDate: new Date().toLocaleString(),
@@ -809,8 +850,11 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
         identityId: activeIdentity.id,
         from: { name: activeIdentity.name, email: activeIdentity.email },
         to: [{ email: recipient }],
-        cc: options?.cc?.map((email) => ({ email })),
-        subject: targetThread ? `Re: ${targetThread.subject}` : "Reply",
+        cc: combinedCc.map((email) => ({ email })),
+        bcc: options?.bcc?.map((email) => ({ email })),
+        inReplyTo: targetThread ? [targetThread.id] : undefined,
+        references: targetThread ? [targetThread.id] : undefined,
+        subject: targetThread ? `Re: ${targetThread.subject.replace(/^(Re:\s*)+/i, "")}` : "Reply",
         body: replyText,
       })
       .then(() => {
@@ -886,7 +930,13 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
       threadCount: 1,
       attachments: data.attachments,
     }
-    setEmails((prev) => [newThread, ...prev])
+    setEmails((prev) =>
+      [newThread, ...prev].sort((a, b) => {
+        const timeA = new Date(a.isoDate || a.fullDate || 0).getTime()
+        const timeB = new Date(b.isoDate || b.fullDate || 0).getTime()
+        return timeB - timeA
+      })
+    )
     toast({ body: `Imported message: "${newThread.subject}"` })
   }
 
@@ -906,6 +956,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
     setEmails((prev) =>
       prev.map((e) => (e.folder === targetFolder ? { ...e, isUnread: false } : e))
     )
+    postarcClient.markAllAsRead(targetFolder).catch(() => {})
     toast({ body: `All messages in ${targetFolder} marked as read` })
   }
 
@@ -1004,8 +1055,30 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
 
   const saveDraft = (to: string, subject: string, body: string, attachments?: EmailAttachment[]) => {
     if (!to && !subject && !body) return
-    toast({ body: "Draft saved" })
+    postarcClient
+      .saveDraft({
+        to,
+        subject,
+        body,
+        attachments: attachments?.map((att) => ({
+          blobId: att.id,
+          name: att.name,
+          type: att.type || "application/octet-stream",
+          size: parseInt(att.size, 10) || 1024,
+        })),
+      })
+      .then(() => {
+        toast({ body: "Draft saved" })
+        refreshMailbox()
+      })
+      .catch(() => {
+        toast({ body: "Draft saved locally" })
+      })
   }
+
+  const uploadAttachment = useCallback((file: File) => {
+    return postarcClient.uploadAttachment(file)
+  }, [])
 
   const createCustomFolder = (name: string, _color?: string) => {
     postarcClient
@@ -1097,6 +1170,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
         allowedRemoteImages,
         allowRemoteImagesForEmail,
         quotaInfo,
+        uploadAttachment,
         undoLastAction,
         openEmail,
         closeEmail,

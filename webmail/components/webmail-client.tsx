@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useRef, useEffect, useMemo } from "react"
+import React, { useState, useRef, useEffect, useMemo, useCallback } from "react"
 import DOMPurify from "dompurify"
 import { Theme } from "@astryxdesign/core/theme"
 import { AppShell } from "@astryxdesign/core/AppShell"
@@ -474,6 +474,7 @@ function HtmlEmailViewer({
   forceLightPaper = false,
   forceDarkCanvas = false,
   allowRemoteImages = false,
+  attachments = [],
 }: {
   html: string
   uiMode?: "light" | "dark"
@@ -481,6 +482,7 @@ function HtmlEmailViewer({
   forceLightPaper?: boolean
   forceDarkCanvas?: boolean
   allowRemoteImages?: boolean
+  attachments?: EmailAttachment[]
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const [iframeHeight, setIframeHeight] = useState<number>(180)
@@ -520,17 +522,26 @@ function HtmlEmailViewer({
       anchor.setAttribute("rel", "noopener noreferrer")
     })
 
-    // Privacy gate: strip external http(s) images until explicitly approved
-    if (!allowRemoteImages) {
-      doc.querySelectorAll("img").forEach((img) => {
-        const src = img.getAttribute("src") || ""
-        if (/^https?:\/\//i.test(src)) {
-          img.setAttribute("data-blocked-src", src)
-          img.removeAttribute("src")
-          img.setAttribute("hidden", "true")
+    // Resolve CID inline images and gate external http(s) images until explicitly approved
+    doc.querySelectorAll("img").forEach((img) => {
+      const src = img.getAttribute("src") || ""
+      if (src.startsWith("cid:")) {
+        const cidName = src.slice(4).trim().replace(/^<|>$/g, "")
+        const matched = attachments?.find(
+          (a) => a.id === cidName || a.name === cidName || a.name.includes(cidName)
+        )
+        if (matched) {
+          const downloadUrl =
+            matched.downloadUrl ||
+            `/api/blob/${encodeURIComponent(matched.id)}/${encodeURIComponent(matched.name)}`
+          img.setAttribute("src", downloadUrl)
         }
-      })
-    }
+      } else if (!allowRemoteImages && /^https?:\/\//i.test(src)) {
+        img.setAttribute("data-blocked-src", src)
+        img.removeAttribute("src")
+        img.setAttribute("hidden", "true")
+      }
+    })
 
     // Gmail-style trimmed `.gmail_quote` detection & toggle
     const quoteNodes = Array.from(doc.querySelectorAll(".gmail_quote"))
@@ -547,7 +558,7 @@ function HtmlEmailViewer({
       processedHtml: doc.body.innerHTML,
       hasTrimmedQuote: detectedQuote,
     }
-  }, [html, allowRemoteImages, showTrimmedQuote, shouldUseDarkAdaptation, category])
+  }, [html, allowRemoteImages, showTrimmedQuote, shouldUseDarkAdaptation, category, attachments])
 
   const srcDocContent = useMemo(() => {
     const colorScheme =
@@ -592,26 +603,37 @@ function HtmlEmailViewer({
 </html>`
   }, [processedHtml, uiMode, category, shouldUseDarkAdaptation])
 
-  const measureIframeHeight = () => {
+  const measureTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+  const measureIframeHeight = useCallback(() => {
     try {
       const doc = iframeRef.current?.contentWindow?.document
       if (!doc?.body) return
       const nextHeight = Math.max(doc.documentElement.scrollHeight, doc.body.scrollHeight)
       if (nextHeight > 20) {
-        setIframeHeight(nextHeight + 8)
+        setIframeHeight((prev) => (Math.abs(prev - (nextHeight + 8)) > 4 ? nextHeight + 8 : prev))
       }
     } catch {
       // Cross-origin guard
     }
-  }
+  }, [])
+
+  const debouncedMeasure = useCallback(() => {
+    if (measureTimeoutRef.current) clearTimeout(measureTimeoutRef.current)
+    measureTimeoutRef.current = setTimeout(() => {
+      measureIframeHeight()
+    }, 60)
+  }, [measureIframeHeight])
 
   useEffect(() => {
     const doc = iframeRef.current?.contentWindow?.document
     if (!doc?.body || typeof ResizeObserver === "undefined") return
-    const observer = new ResizeObserver(() => measureIframeHeight())
+    const observer = new ResizeObserver(() => debouncedMeasure())
     observer.observe(doc.body)
-    return () => observer.disconnect()
-  }, [srcDocContent])
+    return () => {
+      if (measureTimeoutRef.current) clearTimeout(measureTimeoutRef.current)
+      observer.disconnect()
+    }
+  }, [srcDocContent, debouncedMeasure])
 
   const iframeElement = (
     <iframe
@@ -684,6 +706,16 @@ function downloadTextFile(filename: string, content: string, mimeType = "message
   URL.revokeObjectURL(url)
 }
 
+function downloadAttachmentFile(att: EmailAttachment) {
+  const url = att.downloadUrl || `/api/blob/${encodeURIComponent(att.id)}/${encodeURIComponent(att.name)}`
+  const link = document.createElement("a")
+  link.href = url
+  link.download = att.name
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+}
+
 // ─── Unified Webmail Client ──────────────────────────────────────────────────
 export function WebmailClient() {
   const { mode, emailDarkMode } = useThemeMode()
@@ -707,6 +739,7 @@ export function WebmailClient() {
     allowedRemoteImages,
     allowRemoteImagesForEmail,
     quotaInfo,
+    uploadAttachment,
     openEmail,
     closeEmail,
     toggleStar,
@@ -800,7 +833,7 @@ export function WebmailClient() {
     reader.readAsText(file)
   }
 
-  const handleAttachFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAttachFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files
     if (!files || files.length === 0) return
     const formatBytes = (bytes: number) => {
@@ -818,14 +851,22 @@ export function WebmailClient() {
       return "binary"
     }
 
-    const newAttachments: EmailAttachment[] = Array.from(files).map((f) => ({
-      id: `att_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      name: f.name,
-      size: formatBytes(f.size),
-      type: getFileType(f.name),
-    }))
-
-    setComposeAttachments((prev) => [...prev, ...newAttachments])
+    const fileList = Array.from(files)
+    for (const f of fileList) {
+      try {
+        const uploaded = await uploadAttachment(f)
+        const newAtt: EmailAttachment = {
+          id: uploaded.blobId,
+          name: f.name,
+          size: formatBytes(uploaded.size),
+          type: getFileType(f.name),
+          downloadUrl: `/api/blob/${encodeURIComponent(uploaded.blobId)}/${encodeURIComponent(f.name)}`,
+        }
+        setComposeAttachments((prev) => [...prev, newAtt])
+      } catch (err) {
+        console.warn("Failed uploading attachment:", err)
+      }
+    }
     if (attachFileInputRef.current) attachFileInputRef.current.value = ""
   }
 
@@ -991,12 +1032,10 @@ export function WebmailClient() {
     setExpandedOverrides(next)
   }
 
-  const toggleMessageStar = (id: string) => {
-    const msg = threadMessages.find((m) => m.id === id)
-    setMessageStarred((prev) => ({
-      ...prev,
-      [id]: !(prev[id] ?? msg?.isStarred ?? activeEmail?.isStarred),
-    }))
+  const toggleMessageStar = (_id: string) => {
+    if (activeEmail) {
+      toggleStar(activeEmail.id)
+    }
   }
 
   const startInlineReply = (
@@ -1152,36 +1191,44 @@ export function WebmailClient() {
   }
 
   // Filtered emails based on search query, folder, category, and unread toggle
-  const filteredEmails = emails.filter((email) => {
-    if (unreadOnly && !email.isUnread) {
-      return false
-    }
+  const filteredEmails = useMemo(() => {
+    return emails
+      .filter((email) => {
+        if (unreadOnly && !email.isUnread) {
+          return false
+        }
 
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase().trim()
-      return (
-        email.subject.toLowerCase().includes(q) ||
-        email.senderName.toLowerCase().includes(q) ||
-        email.senderEmail.toLowerCase().includes(q) ||
-        email.snippet.toLowerCase().includes(q)
-      )
-    }
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase().trim()
+          return (
+            email.subject.toLowerCase().includes(q) ||
+            email.senderName.toLowerCase().includes(q) ||
+            email.senderEmail.toLowerCase().includes(q) ||
+            email.snippet.toLowerCase().includes(q)
+          )
+        }
 
-    if (activeFolder === "starred") {
-      return email.isStarred
-    }
+        if (activeFolder === "starred") {
+          return email.isStarred
+        }
 
-    if (activeFolder === "inbox") {
-      return (
-        email.folder === "inbox" &&
-        (activeCategory === "primary"
-          ? !email.category || email.category === "primary"
-          : email.category === activeCategory)
-      )
-    }
+        if (activeFolder === "inbox") {
+          return (
+            email.folder === "inbox" &&
+            (activeCategory === "primary"
+              ? !email.category || email.category === "primary"
+              : email.category === activeCategory)
+          )
+        }
 
-    return email.folder === activeFolder
-  })
+        return email.folder === activeFolder
+      })
+      .sort((a, b) => {
+        const timeA = new Date(a.isoDate || a.fullDate || 0).getTime()
+        const timeB = new Date(b.isoDate || b.fullDate || 0).getTime()
+        return timeB - timeA
+      })
+  }, [emails, unreadOnly, searchQuery, activeFolder, activeCategory])
 
   // Mail list pagination (50 threads per page)
   const [mailListPage, setMailListPage] = useState(0)
@@ -1690,13 +1737,7 @@ export function WebmailClient() {
                     size="sm"
                     color={getAttachmentTokenColor(att.name, att.type)}
                     icon={<Paperclip size={12} />}
-                    onClick={() =>
-                      downloadTextFile(
-                        att.name,
-                        `Attachment: ${att.name} (${att.size})`,
-                        "application/octet-stream"
-                      )
-                    }
+                    onClick={() => downloadAttachmentFile(att)}
                   />
                 ))}
               </HStack>
@@ -1707,8 +1748,13 @@ export function WebmailClient() {
     },
   ]
 
-  const storageUsedGB = (quotaInfo.usedBytes / (1024 * 1024 * 1024)).toFixed(1)
-  const storageTotalGB = (quotaInfo.totalBytes / (1024 * 1024 * 1024)).toFixed(0)
+  const formatStorage = (bytes: number) => {
+    if (bytes >= 1024 * 1024 * 1024) {
+      return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
+    }
+    return `${Math.round(bytes / (1024 * 1024))} MB`
+  }
+  const storageLabel = `${formatStorage(quotaInfo.usedBytes)} of ${formatStorage(quotaInfo.totalBytes)} (${quotaInfo.percent}%)`
 
   return (
     <AppShell
@@ -1833,7 +1879,7 @@ export function WebmailClient() {
                   Storage
                 </Text>
                 <Text type="supporting" color="secondary" size="xsm" weight="medium">
-                  {storageUsedGB} / {storageTotalGB} GB ({quotaInfo.percent}%)
+                  {storageLabel}
                 </Text>
               </HStack>
               <ProgressBar
@@ -2367,8 +2413,7 @@ export function WebmailClient() {
                         <List edge="bleed" hasDividers density="balanced">
                           {group.items.map((item) => {
                             const { msg, idx, total: msgTotal } = item
-                            const isStarred =
-                              messageStarred[msg.id] ?? msg.isStarred ?? activeEmail.isStarred
+                            const isStarred = Boolean(activeEmail?.isStarred)
 
                             return (
                               <ListItem
@@ -2444,8 +2489,7 @@ export function WebmailClient() {
                   }
 
                   const { msg, idx, total: msgTotal } = group.entry
-                  const isStarred =
-                    messageStarred[msg.id] ?? msg.isStarred ?? activeEmail.isStarred
+                  const isStarred = Boolean(activeEmail?.isStarred)
                   const htmlCat = msg.htmlBody ? classifyHtmlEmail(msg.htmlBody) : null
                   const canToggleHtmlTheme =
                     mode === "dark" && Boolean(msg.htmlBody) && htmlCat === "designed"
@@ -2736,6 +2780,7 @@ export function WebmailClient() {
                               allowRemoteImages={Boolean(
                                 activeEmail.remoteImagesAllowed || allowedRemoteImages.has(activeEmail.id)
                               )}
+                              attachments={msg.attachments}
                             />
                           ) : (
                             <PlainTextEmailViewer
@@ -2763,22 +2808,7 @@ export function WebmailClient() {
                                     size="md"
                                     color={getAttachmentTokenColor(att.name, att.type)}
                                     icon={<Download size={14} />}
-                                    onClick={() => {
-                                      if (att.downloadUrl && att.downloadUrl !== "#") {
-                                        const link = document.createElement("a")
-                                        link.href = att.downloadUrl
-                                        link.download = att.name
-                                        document.body.appendChild(link)
-                                        link.click()
-                                        document.body.removeChild(link)
-                                      } else {
-                                        downloadTextFile(
-                                          att.name,
-                                          `Attachment: ${att.name} (${att.size})`,
-                                          "application/octet-stream"
-                                        )
-                                      }
-                                    }}
+                                    onClick={() => downloadAttachmentFile(att)}
                                   />
                                 ))}
                               </HStack>
@@ -3444,7 +3474,7 @@ export function WebmailClient() {
               </HStack>
 
               {/* Recipient Field with Contact Autocomplete */}
-              <VStack gap={1} width="100%">
+              <VStack gap={1} width="100%" className="relative">
                 <HStack gap={2} vAlign="center" width="100%">
                   <TextInput
                     label="Recipients (To)"
@@ -3464,8 +3494,8 @@ export function WebmailClient() {
 
                 {/* Contact Suggestions Dropdown */}
                 {contactSuggestions.length > 0 && (
-                  <Card padding={1}>
-                    <VStack gap={1}>
+                  <Card padding={1} elevation="high" className="absolute top-full left-0 right-0 z-50">
+                    <VStack gap={1} height={180} isScrollable>
                       {contactSuggestions.map((c) => (
                         <Button
                           key={c.id}
