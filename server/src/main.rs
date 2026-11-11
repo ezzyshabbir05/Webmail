@@ -3,12 +3,12 @@ mod config;
 mod db;
 mod event_bus;
 mod jmap;
+mod smtp;
 mod storage;
 
 use config::PostarcConfig;
 use db::MailRepository;
 use event_bus::EventBus;
-use std::sync::Arc;
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
@@ -64,6 +64,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             storage::spawn_blob_gc_worker(repo.clone(), storage.clone());
             info!("Background soft-delete garbage collection worker spawned.");
 
+            // Spawn outbound delivery queue worker
+            smtp::spawn_outbound_queue_worker(repo.clone(), storage.clone(), event_bus.clone());
+            info!("Outbound delivery queue worker active.");
+
             Some(repo)
         }
         Err(e) => {
@@ -87,6 +91,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::spawn(async move {
             if let Err(e) = jmap::run_jmap_server(jmap_bind_addr, app_state).await {
                 error!("JMAP server terminated with error: {}", e);
+            }
+        });
+
+        // Start SMTP Inbound MTA (Port 25)
+        let smtp_addr = config.smtp_bind_addr;
+        let smtp_repo = repo.clone();
+        let smtp_storage = storage.clone();
+        let smtp_bus = event_bus.clone();
+        let smtp_hostname = config.hostname.clone();
+        tokio::spawn(async move {
+            if let Err(e) = smtp::run_smtp_listener(
+                smtp_addr,
+                false,
+                smtp_repo,
+                smtp_storage,
+                smtp_bus,
+                smtp_hostname,
+            )
+            .await
+            {
+                error!("SMTP Port 25 listener terminated with error: {}", e);
+            }
+        });
+
+        // Start SMTP Submission (Port 587)
+        let sub_addr = config.submission_bind_addr;
+        let sub_repo = repo.clone();
+        let sub_storage = storage.clone();
+        let sub_bus = event_bus.clone();
+        let sub_hostname = config.hostname.clone();
+        tokio::spawn(async move {
+            if let Err(e) = smtp::run_smtp_listener(
+                sub_addr,
+                true,
+                sub_repo,
+                sub_storage,
+                sub_bus,
+                sub_hostname,
+            )
+            .await
+            {
+                error!("SMTP Submission Port 587 listener terminated with error: {}", e);
             }
         });
     }
