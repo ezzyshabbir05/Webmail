@@ -46,6 +46,8 @@ pub fn create_router(state: AppState) -> Router {
         .allow_headers(Any);
 
     Router::new()
+        .route("/healthz", get(get_healthz))
+        .route("/.well-known/mta-sts.txt", get(get_mta_sts))
         .route("/api/auth/login", post(post_auth_login))
         .route("/.well-known/jmap", get(get_session))
         .route("/api/jmap", post(post_jmap))
@@ -262,7 +264,7 @@ async fn post_upload(
         return (StatusCode::INTERNAL_SERVER_ERROR, format!("Storage error: {}", e)).into_response();
     }
 
-    let _ = state.repo.reserve_blob(&sha256, size).await;
+    let _ = state.repo.reserve_blob(&sha256, size, size, "zstd").await;
 
     Json(json!({
         "accountId": account_id,
@@ -271,4 +273,22 @@ async fn post_upload(
         "size": size
     }))
     .into_response()
+}
+
+async fn get_healthz(State(state): State<AppState>) -> Response {
+    if state.repo.pool().is_closed() {
+        return (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "status": "fail", "reason": "database disconnected" }))).into_response();
+    }
+    (StatusCode::OK, Json(json!({ "status": "pass", "service": "postarc-mailserver", "version": "0.1.0" }))).into_response()
+}
+
+async fn get_mta_sts(State(state): State<AppState>) -> Response {
+    let domain = state.default_admin_email.split('@').nth(1).unwrap_or("localhost");
+    let content = format!(
+        "version: STSv1\r\nmode: testing\r\nmx: mail.{}\r\nmax_age: 604800\r\n",
+        domain
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert(header::CONTENT_TYPE, "text/plain; charset=utf-8".parse().unwrap());
+    (StatusCode::OK, headers, content).into_response()
 }

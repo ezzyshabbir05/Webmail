@@ -1,21 +1,53 @@
 mod auth;
+mod cli;
 mod config;
 mod db;
 mod event_bus;
 mod imap;
 mod jmap;
+mod security;
 mod smtp;
 mod storage;
 mod tls;
 
+use clap::Parser;
+use cli::{Cli, Commands};
 use config::PostarcConfig;
 use db::MailRepository;
 use event_bus::EventBus;
+use security::SecurityManager;
+use tls::TlsManager;
 use tracing::{error, info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Install Rustls cryptographic provider (Ring)
+    let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+
+    // Parse CLI arguments
+    let cli = Cli::parse();
+
+    // If a subcommand was specified (setup, doctor, domain, user, alias, dkim), dispatch to it
+    if let Some(cmd) = cli.command {
+        match cmd {
+            Commands::Setup => return cli::setup::run_setup_wizard().await,
+            Commands::Doctor { domain } => return cli::doctor::run_doctor(domain).await,
+            Commands::Domain { cmd } => return cli::domain::handle_domain_command(cmd).await,
+            Commands::User { cmd } => return cli::user::handle_user_command(cmd).await,
+            Commands::Alias { cmd } => return cli::alias::handle_alias_command(cmd).await,
+            Commands::Dkim { cmd } => return cli::dkim::handle_dkim_command(cmd).await,
+            Commands::Run => {
+                // Proceed to daemon execution
+            }
+        }
+    }
+
+    // Default execution: Start the unified mail daemon
+    run_daemon().await
+}
+
+async fn run_daemon() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing / structured logging
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
@@ -33,20 +65,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Domain: {}", config.mail_domain);
     info!("Hostname: {}", config.hostname);
     info!("SMTP Port: {}", config.smtp_bind_addr);
+    info!("SMTPS Port: {}", config.smtps_bind_addr);
     info!("Submission Port: {}", config.submission_bind_addr);
+    info!("IMAP Port: {}", config.imap_bind_addr);
     info!("IMAPS Port: {}", config.imaps_bind_addr);
     info!("JMAP API Port: {}", config.jmap_bind_addr);
     info!("Storage Mode: {:?}", config.storage_backend);
 
-    // Initialize In-Process Event Bus
-    let event_bus = EventBus::new(2048);
-    info!("In-process event bus initialized (tokio::broadcast, 2048 slot ring).");
+    // 1. Initialize In-Process Event Bus
+    let event_bus = EventBus::new(4096);
+    info!("In-process event bus initialized (tokio::broadcast, 4096 slot ring).");
 
-    // Initialize Content-Addressed Blob Storage
+    // 2. Initialize Hot-reloading TLS Manager
+    let tls_manager = TlsManager::new(
+        config.hostname.clone(),
+        config.tls_cert_path.as_deref(),
+        config.tls_key_path.as_deref(),
+    );
+
+    // 3. Initialize Security & Rate Limiting Manager
+    let security_manager = SecurityManager::new();
+
+    // 4. Initialize Content-Addressed Blob Storage (with Zstandard transparent compression)
     let storage = storage::init_storage(&config).await;
-    info!("Blob storage subsystem ready.");
+    info!("Blob storage subsystem ready (Zstandard compression active).");
 
-    // Initialize Database
+    // 5. Initialize Database
     let repo_opt = match db::init_pool(&config.database_url).await {
         Ok(pool) => {
             info!("Connected to PostgreSQL successfully.");
@@ -108,14 +152,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let smtp_repo = repo.clone();
         let smtp_storage = storage.clone();
         let smtp_bus = event_bus.clone();
+        let smtp_tls = tls_manager.clone();
+        let smtp_sec = security_manager.clone();
         let smtp_hostname = config.hostname.clone();
         tokio::spawn(async move {
             if let Err(e) = smtp::run_smtp_listener(
                 smtp_addr,
-                false,
+                false, // Inbound
+                false, // STARTTLS
                 smtp_repo,
                 smtp_storage,
                 smtp_bus,
+                smtp_tls,
+                smtp_sec,
                 smtp_hostname,
             )
             .await
@@ -124,19 +173,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
-        // 3. Start SMTP Submission (Port 587)
+        // 3. Start SMTPS Implicit TLS Submission (Port 465)
+        let smtps_addr = config.smtps_bind_addr;
+        let smtps_repo = repo.clone();
+        let smtps_storage = storage.clone();
+        let smtps_bus = event_bus.clone();
+        let smtps_tls = tls_manager.clone();
+        let smtps_sec = security_manager.clone();
+        let smtps_hostname = config.hostname.clone();
+        tokio::spawn(async move {
+            if let Err(e) = smtp::run_smtp_listener(
+                smtps_addr,
+                true, // Submission
+                true, // Implicit TLS
+                smtps_repo,
+                smtps_storage,
+                smtps_bus,
+                smtps_tls,
+                smtps_sec,
+                smtps_hostname,
+            )
+            .await
+            {
+                error!("SMTPS Port 465 listener terminated with error: {}", e);
+            }
+        });
+
+        // 4. Start SMTP Submission with STARTTLS (Port 587)
         let sub_addr = config.submission_bind_addr;
         let sub_repo = repo.clone();
         let sub_storage = storage.clone();
         let sub_bus = event_bus.clone();
+        let sub_tls = tls_manager.clone();
+        let sub_sec = security_manager.clone();
         let sub_hostname = config.hostname.clone();
         tokio::spawn(async move {
             if let Err(e) = smtp::run_smtp_listener(
                 sub_addr,
-                true,
+                true,  // Submission
+                false, // STARTTLS
                 sub_repo,
                 sub_storage,
                 sub_bus,
+                sub_tls,
+                sub_sec,
                 sub_hostname,
             )
             .await
@@ -145,32 +225,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
-        // 4. Start IMAP4rev2 Server (Port 993)
-        let imap_addr = config.imaps_bind_addr;
+        // 5. Start IMAP (Port 143 STARTTLS)
+        let imap_addr = config.imap_bind_addr;
         let imap_repo = repo.clone();
         let imap_storage = storage.clone();
         let imap_bus = event_bus.clone();
+        let imap_tls = tls_manager.clone();
         let imap_hostname = config.hostname.clone();
         tokio::spawn(async move {
             if let Err(e) = imap::run_imap_listener(
                 imap_addr,
+                false, // Plain with STARTTLS
                 imap_repo,
                 imap_storage,
                 imap_bus,
+                imap_tls,
                 imap_hostname,
             )
             .await
             {
-                error!("IMAP4rev2 Port 993 listener terminated with error: {}", e);
+                error!("IMAP Port 143 listener terminated with error: {}", e);
+            }
+        });
+
+        // 6. Start IMAPS (Port 993 Implicit TLS)
+        let imaps_addr = config.imaps_bind_addr;
+        let imaps_repo = repo.clone();
+        let imaps_storage = storage.clone();
+        let imaps_bus = event_bus.clone();
+        let imaps_tls = tls_manager.clone();
+        let imaps_hostname = config.hostname.clone();
+        tokio::spawn(async move {
+            if let Err(e) = imap::run_imap_listener(
+                imaps_addr,
+                true, // Implicit TLS
+                imaps_repo,
+                imaps_storage,
+                imaps_bus,
+                imaps_tls,
+                imaps_hostname,
+            )
+            .await
+            {
+                error!("IMAPS Port 993 listener terminated with error: {}", e);
             }
         });
     }
 
     info!("===============================================================");
     info!(" Postarc Mailserver daemon is fully ONLINE and serving traffic!");
-    info!("   - SMTP Inbound (MTA):         Port 25");
-    info!("   - SMTP Submission (STARTTLS): Port 587");
-    info!("   - IMAP4rev2:                  Port 993");
+    info!("   - SMTP Inbound (MTA):         Port 25  (STARTTLS)");
+    info!("   - SMTPS Submission:           Port 465 (Implicit TLS)");
+    info!("   - SMTP Submission:            Port 587 (STARTTLS)");
+    info!("   - IMAP:                       Port 143 (STARTTLS)");
+    info!("   - IMAPS:                      Port 993 (Implicit TLS)");
     info!("   - JMAP & Webmail API:         Port 8080");
     info!("===============================================================");
     info!("Awaiting client connections and messages (Press Ctrl+C to stop)...");

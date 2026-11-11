@@ -14,6 +14,8 @@ pub enum StorageError {
     S3(String),
     #[error("Blob not found: {0}")]
     NotFound(String),
+    #[error("Compression error: {0}")]
+    Compression(String),
 }
 
 pub trait BlobStorage: Send + Sync {
@@ -28,6 +30,7 @@ pub trait BlobStorage: Send + Sync {
         sha256: &'a str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, StorageError>> + Send + 'a>>;
 
+    #[allow(dead_code)]
     fn has_blob<'a>(
         &'a self,
         sha256: &'a str,
@@ -39,8 +42,63 @@ pub trait BlobStorage: Send + Sync {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), StorageError>> + Send + 'a>>;
 }
 
+pub struct CompressedBlobStorage {
+    inner: Arc<dyn BlobStorage>,
+}
+
+impl CompressedBlobStorage {
+    pub fn new(inner: Arc<dyn BlobStorage>) -> Self {
+        Self { inner }
+    }
+}
+
+impl BlobStorage for CompressedBlobStorage {
+    fn put_blob<'a>(
+        &'a self,
+        sha256: &'a str,
+        data: &'a [u8],
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), StorageError>> + Send + 'a>> {
+        Box::pin(async move {
+            let compressed = zstd::encode_all(data, 3)
+                .map_err(|e| StorageError::Compression(e.to_string()))?;
+            self.inner.put_blob(sha256, &compressed).await
+        })
+    }
+
+    fn get_blob<'a>(
+        &'a self,
+        sha256: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, StorageError>> + Send + 'a>> {
+        Box::pin(async move {
+            let raw = self.inner.get_blob(sha256).await?;
+            // Zstandard frame magic number is 0xFD2FB528 (in little-endian: 0x28, 0xb5, 0x2f, 0xfd)
+            if raw.len() >= 4 && &raw[..4] == [0x28, 0xb5, 0x2f, 0xfd] {
+                zstd::decode_all(&raw[..])
+                    .map_err(|e| StorageError::Compression(e.to_string()))
+            } else {
+                Ok(raw)
+            }
+        })
+    }
+
+    #[allow(dead_code)]
+    fn has_blob<'a>(
+        &'a self,
+        sha256: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<bool, StorageError>> + Send + 'a>> {
+        self.inner.has_blob(sha256)
+    }
+
+    fn delete_blob<'a>(
+        &'a self,
+        sha256: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), StorageError>> + Send + 'a>> {
+        self.inner.delete_blob(sha256)
+    }
+}
+
 pub async fn init_storage(config: &PostarcConfig) -> Arc<dyn BlobStorage> {
-    match config.storage_backend {
+    let raw_storage: Arc<dyn BlobStorage> = match config.storage_backend {
         StorageBackend::S3 => {
             if let (Some(bucket), Some(endpoint), Some(key_id), Some(secret_key)) = (
                 &config.r2_bucket,
@@ -59,7 +117,9 @@ pub async fn init_storage(config: &PostarcConfig) -> Arc<dyn BlobStorage> {
             info!("Initializing Local Filesystem Blob Storage at: {}", config.storage_fs_path);
             Arc::new(fs::FsBlobStorage::new(&config.storage_fs_path))
         }
-    }
+    };
+
+    Arc::new(CompressedBlobStorage::new(raw_storage))
 }
 
 pub fn spawn_blob_gc_worker(repo: MailRepository, storage: Arc<dyn BlobStorage>) {

@@ -23,7 +23,7 @@ pub fn spawn_outbound_queue_worker(
 ) {
     tokio::spawn(async move {
         let resolver = TokioAsyncResolver::tokio(ResolverConfig::google(), ResolverOpts::default());
-        let dkim_manager = Arc::new(DkimManager::new(mail_domain, "mail".to_string()));
+        let default_dkim_manager = Arc::new(DkimManager::new(mail_domain.clone(), "mail".to_string()));
         let mut interval = tokio::time::interval(Duration::from_secs(5));
 
         loop {
@@ -45,8 +45,8 @@ pub fn spawn_outbound_queue_worker(
             if let Ok(items) = queued_items {
                 for (queue_id, message_id, sender, recipient, attempts) in items {
                     info!(
-                        "Processing outbound delivery [{}]: {} -> {}",
-                        queue_id, sender, recipient
+                        "Processing outbound delivery [{}]: {} -> {} (attempt {})",
+                        queue_id, sender, recipient, attempts + 1
                     );
 
                     // Mark as in-flight
@@ -66,11 +66,10 @@ pub fn spawn_outbound_queue_worker(
                     .await
                     .unwrap_or(None);
 
-                    let payload = if let Some(ref msg) = msg_opt {
-                        match storage.get_blob(&msg.blob_id).await {
-                            Ok(bytes) => bytes,
+                    let (payload, subject) = if let Some(ref msg) = msg_opt {
+                        let bytes = match storage.get_blob(&msg.blob_id).await {
+                            Ok(b) => b,
                             Err(_) => {
-                                // Synthesize MIME message from metadata
                                 format!(
                                     "From: {}\r\nTo: {}\r\nSubject: {}\r\nDate: {}\r\nMessage-ID: <{}@{}>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{}",
                                     msg.from_address,
@@ -83,9 +82,9 @@ pub fn spawn_outbound_queue_worker(
                                 )
                                 .into_bytes()
                             }
-                        }
+                        };
+                        (bytes, msg.subject.clone())
                     } else {
-                        // Message no longer exists
                         let _ = sqlx::query(
                             "UPDATE outbound_queue SET status = 'failed', last_error = 'Message metadata missing' WHERE id = $1",
                         )
@@ -101,10 +100,21 @@ pub fn spawn_outbound_queue_worker(
                         .trim_end_matches('>')
                         .to_lowercase();
 
-                    // 2. Check if recipient is a local account on this Postarc instance
-                    if let Ok(Some(_)) = repo.get_account_by_email(&clean_rcpt).await {
+                    // 2. Local delivery fast path if recipient is on this mailserver
+                    if let Ok(Some(_)) = repo.resolve_recipient(&clean_rcpt).await {
                         info!("Delivering locally to {}", clean_rcpt);
-                        match process_inbound_mail(&repo, &storage, &event_bus, &clean_rcpt, &payload).await {
+                        match process_inbound_mail(
+                            &repo,
+                            &storage,
+                            &event_bus,
+                            &clean_rcpt,
+                            &sender,
+                            None,
+                            &hostname,
+                            &payload,
+                        )
+                        .await
+                        {
                             Ok(_) => {
                                 let _ = sqlx::query(
                                     "UPDATE outbound_queue SET status = 'delivered', last_error = NULL WHERE id = $1",
@@ -122,7 +132,7 @@ pub fn spawn_outbound_queue_worker(
                     }
 
                     // 3. Resolve destination domain MX records
-                    let domain = match clean_rcpt.split('@').nth(1) {
+                    let dest_domain = match clean_rcpt.split('@').nth(1) {
                         Some(d) => d,
                         None => {
                             let _ = sqlx::query(
@@ -136,7 +146,7 @@ pub fn spawn_outbound_queue_worker(
                     };
 
                     let mut mx_hosts: Vec<String> = Vec::new();
-                    if let Ok(mx_response) = resolver.mx_lookup(domain).await {
+                    if let Ok(mx_response) = resolver.mx_lookup(dest_domain).await {
                         let mut records: Vec<_> = mx_response.into_iter().collect();
                         records.sort_by_key(|r| r.preference());
                         for r in records {
@@ -144,13 +154,25 @@ pub fn spawn_outbound_queue_worker(
                         }
                     }
 
-                    // Fallback to A record if no MX records
                     if mx_hosts.is_empty() {
-                        mx_hosts.push(domain.to_string());
+                        mx_hosts.push(dest_domain.to_string());
                     }
 
-                    // 4. Attempt SMTP delivery to candidate MX hosts with DKIM signing
-                    let dkim_signed_payload = dkim_manager.sign_message(&payload);
+                    // 4. DKIM Signing (use database stored key if available, else default)
+                    let sender_domain = sender.split('@').nth(1).unwrap_or(&mail_domain);
+                    let signed_payload = if let Ok(Some(dkim_key)) = repo.get_dkim_key(sender_domain, "mail").await {
+                        // DB-backed key found
+                        let dkim_mgr = DkimManager::from_pem(
+                            sender_domain.to_string(),
+                            dkim_key.selector,
+                            dkim_key.private_key_pem.as_bytes(),
+                        );
+                        dkim_mgr.sign_message(&payload)
+                    } else {
+                        default_dkim_manager.sign_message(&payload)
+                    };
+
+                    // 5. Attempt SMTP delivery to MX hosts
                     let mut delivery_success = false;
                     let mut last_error_msg = String::from("No MX servers reachable");
 
@@ -160,7 +182,7 @@ pub fn spawn_outbound_queue_worker(
 
                         match timeout(
                             Duration::from_secs(20),
-                            deliver_via_smtp(&target_addr, mx, &hostname, &sender, &clean_rcpt, &dkim_signed_payload),
+                            deliver_via_smtp(&target_addr, mx, &hostname, &sender, &clean_rcpt, &signed_payload),
                         )
                         .await
                         {
@@ -180,7 +202,7 @@ pub fn spawn_outbound_queue_worker(
                         }
                     }
 
-                    // 5. Update queue status
+                    // 6. Handle Delivery Outcome
                     if delivery_success {
                         let _ = sqlx::query(
                             "UPDATE outbound_queue SET status = 'delivered', last_error = NULL WHERE id = $1",
@@ -188,7 +210,8 @@ pub fn spawn_outbound_queue_worker(
                         .bind(queue_id)
                         .execute(repo.pool())
                         .await;
-                    } else if attempts >= 4 {
+                    } else if attempts >= 6 {
+                        // Max retries exceeded: Permanent Failure
                         error!("Outbound delivery [{}] permanently failed: {}", queue_id, last_error_msg);
                         let _ = sqlx::query(
                             "UPDATE outbound_queue SET status = 'failed', last_error = $1 WHERE id = $2",
@@ -197,18 +220,46 @@ pub fn spawn_outbound_queue_worker(
                         .bind(queue_id)
                         .execute(repo.pool())
                         .await;
+
+                        // Generate RFC 3464 Non-Delivery Report (DSN Bounce) to local sender
+                        let bounce_body = format!(
+                            "From: MAILER-DAEMON <MAILER-DAEMON@{}>\r\nTo: <{}>\r\nSubject: Undelivered Mail Returned to Sender: {}\r\nAuto-Submitted: auto-replied\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nThis is the mail system at host {}.\r\n\r\nI'm sorry to have to inform you that your message could not\r\nbe delivered to one or more recipients. It's attached below.\r\n\r\n<recipient>: <{}>\r\nReason: {}\r\n",
+                            mail_domain, sender, subject, hostname, clean_rcpt, last_error_msg
+                        );
+
+                        let _ = process_inbound_mail(
+                            &repo,
+                            &storage,
+                            &event_bus,
+                            &sender,
+                            &format!("MAILER-DAEMON@{}", mail_domain),
+                            None,
+                            &hostname,
+                            bounce_body.as_bytes(),
+                        )
+                        .await;
+                        info!("Generated and delivered RFC 3464 DSN Bounce to local sender {}", sender);
                     } else {
-                        warn!("Outbound delivery [{}] retry scheduled: {}", queue_id, last_error_msg);
+                        // Exponential backoff
+                        let retry_delays = [2, 5, 15, 30, 60, 120, 240];
+                        let delay_minutes = retry_delays.get(attempts as usize).copied().unwrap_or(240);
+
+                        warn!(
+                            "Outbound delivery [{}] retry #{} scheduled in {} minutes: {}",
+                            queue_id, attempts + 1, delay_minutes, last_error_msg
+                        );
+
                         let _ = sqlx::query(
                             r#"
                             UPDATE outbound_queue
                             SET status = 'queued',
                                 attempts = attempts + 1,
-                                next_retry_at = NOW() + INTERVAL '3 minutes',
-                                last_error = $1
-                            WHERE id = $2
+                                next_retry_at = NOW() + ($1 || ' minutes')::interval,
+                                last_error = $2
+                            WHERE id = $3
                             "#,
                         )
+                        .bind(delay_minutes.to_string())
                         .bind(&last_error_msg)
                         .bind(queue_id)
                         .execute(repo.pool())

@@ -1,4 +1,4 @@
-use crate::db::MailRepository;
+use crate::db::{EnrichedMessage, FlagUpdates, MailRepository, NewIncomingMessage};
 use crate::event_bus::{EventBus, MailboxEvent, MailboxEventType};
 use crate::storage::BlobStorage;
 use mail_parser::MessageParser;
@@ -15,7 +15,7 @@ pub async fn handle_email_get(
 ) -> Result<Value, String> {
     let ids_opt = args.get("ids").and_then(|v| v.as_array());
 
-    let messages = if let Some(ids_array) = ids_opt {
+    let messages: Vec<EnrichedMessage> = if let Some(ids_array) = ids_opt {
         let mut uuids = Vec::new();
         for id_val in ids_array {
             if let Some(id_str) = id_val.as_str() {
@@ -24,8 +24,20 @@ pub async fn handle_email_get(
                 }
             }
         }
-        sqlx::query_as::<_, crate::db::Message>(
-            "SELECT * FROM messages WHERE account_id = $1 AND id = ANY($2)",
+        sqlx::query_as::<_, EnrichedMessage>(
+            r#"
+            SELECT 
+                m.id, m.account_id, mm.mailbox_id, m.blob_id, m.thread_id,
+                mm.uid, mm.modseq, m.rfc822_message_id, m.in_reply_to,
+                m.subject, m.from_address, m.from_name, m.to_addresses,
+                m.cc_addresses, m.bcc_addresses, m.reply_to, m.date,
+                m.size_bytes, m.snippet, m.has_attachments,
+                mm.is_unread, mm.is_flagged, mm.is_draft, mm.is_answered,
+                mm.is_deleted, mm.keywords, m.created_at
+            FROM messages m
+            JOIN message_mailboxes mm ON mm.message_id = m.id
+            WHERE m.account_id = $1 AND m.id = ANY($2) AND mm.is_deleted = false
+            "#,
         )
         .bind(account_id)
         .bind(&uuids)
@@ -83,10 +95,10 @@ pub async fn handle_email_get(
             "size": msg.size_bytes,
             "receivedAt": msg.date.to_rfc3339(),
             "subject": msg.subject,
-            "from": [{ "name": "", "email": msg.from_address }],
+            "from": [{ "name": msg.from_name, "email": msg.from_address }],
             "to": [{ "name": "", "email": msg.to_addresses }],
             "preview": msg.snippet,
-            "hasAttachment": false,
+            "hasAttachment": msg.has_attachments,
             "bodyValues": {
                 "1": {
                     "value": body_val,
@@ -131,21 +143,29 @@ pub async fn handle_email_query(
         .and_then(|f| f.get("text"))
         .and_then(|v| v.as_str());
 
-    let messages = if let Some(query) = text_query {
+    let messages: Vec<EnrichedMessage> = if let Some(query) = text_query {
         repo.search_messages(account_id, query, limit)
             .await
             .map_err(|e| format!("Search error: {}", e))?
     } else if let Some(mb_id) = in_mailbox {
-        repo.list_messages(mb_id, limit, position)
+        repo.list_messages_in_mailbox(mb_id, limit, position)
             .await
             .map_err(|e| format!("List error: {}", e))?
     } else {
-        // Query all messages for this account across mailboxes
-        sqlx::query_as::<_, crate::db::Message>(
+        sqlx::query_as::<_, EnrichedMessage>(
             r#"
-            SELECT * FROM messages
-            WHERE account_id = $1
-            ORDER BY date DESC
+            SELECT 
+                m.id, m.account_id, mm.mailbox_id, m.blob_id, m.thread_id,
+                mm.uid, mm.modseq, m.rfc822_message_id, m.in_reply_to,
+                m.subject, m.from_address, m.from_name, m.to_addresses,
+                m.cc_addresses, m.bcc_addresses, m.reply_to, m.date,
+                m.size_bytes, m.snippet, m.has_attachments,
+                mm.is_unread, mm.is_flagged, mm.is_draft, mm.is_answered,
+                mm.is_deleted, mm.keywords, m.created_at
+            FROM messages m
+            JOIN message_mailboxes mm ON mm.message_id = m.id
+            WHERE m.account_id = $1 AND mm.is_deleted = false
+            ORDER BY m.date DESC
             LIMIT $2 OFFSET $3
             "#,
         )
@@ -257,43 +277,47 @@ pub async fn handle_email_set(
             let blob_id = hex::encode(hasher.finalize());
 
             let _ = storage.put_blob(&blob_id, payload).await;
-            let _ = repo.reserve_blob(&blob_id, payload.len() as i64).await;
+            let _ = repo.reserve_blob(&blob_id, payload.len() as i64, payload.len() as i64, "zstd").await;
 
-            let new_msg = crate::db::NewMessage {
+            let incoming = NewIncomingMessage {
                 account_id,
                 mailbox_id,
                 blob_id: blob_id.clone(),
-                thread_id: None,
+                rfc822_message_id: format!("<{}@postarc>", Uuid::new_v4()),
+                in_reply_to: String::new(),
+                references: Vec::new(),
                 subject: subject.clone(),
                 from_address: from_addr,
+                from_name: String::new(),
                 to_addresses: to_addr,
                 cc_addresses: None,
                 bcc_addresses: None,
                 reply_to: None,
                 date: chrono::Utc::now(),
                 size_bytes: payload.len() as i64,
+                snippet,
+                has_attachments: false,
                 is_unread: false,
                 is_flagged: false,
                 is_draft: false,
                 keywords: vec!["$seen".to_string()],
-                snippet,
             };
 
-            if let Ok(inserted) = repo.insert_message(new_msg).await {
+            if let Ok((inserted_msg, junction)) = repo.insert_message_with_junction(incoming).await {
                 event_bus.publish(MailboxEvent {
                     account_id,
                     mailbox_id,
                     event_type: MailboxEventType::Created,
-                    uid: inserted.uid,
-                    modseq: inserted.modseq,
+                    uid: junction.uid,
+                    modseq: junction.modseq,
                 });
 
                 created.insert(
                     temp_id.clone(),
                     json!({
-                        "id": inserted.id.to_string(),
+                        "id": inserted_msg.id.to_string(),
                         "blobId": blob_id,
-                        "threadId": inserted.thread_id.to_string(),
+                        "threadId": inserted_msg.thread_id.to_string(),
                         "size": payload.len()
                     }),
                 );
@@ -304,43 +328,48 @@ pub async fn handle_email_set(
     if let Some(update_map) = args.get("update").and_then(|v| v.as_object()) {
         for (id_str, patch) in update_map {
             if let Ok(msg_id) = Uuid::parse_str(id_str) {
-                let mut is_unread = None;
-                let mut is_flagged = None;
+                // Find mailbox_id and uid for this message
+                let junc_opt = sqlx::query_as::<_, (Uuid, i32)>(
+                    "SELECT mailbox_id, uid FROM message_mailboxes WHERE message_id = $1 LIMIT 1",
+                )
+                .bind(msg_id)
+                .fetch_optional(repo.pool())
+                .await
+                .unwrap_or(None);
 
-                if let Some(keywords) = patch.get("keywords").and_then(|k| k.as_object()) {
-                    if let Some(seen) = keywords.get("$seen").and_then(|v| v.as_bool()) {
-                        is_unread = Some(!seen);
-                    }
-                    if let Some(flagged) = keywords.get("$flagged").and_then(|v| v.as_bool()) {
-                        is_flagged = Some(flagged);
-                    }
-                }
+                if let Some((current_mb_id, current_uid)) = junc_opt {
+                    let mut flags = FlagUpdates::default();
 
-                // Handle move to different mailbox
-                if let Some(mb_ids) = patch.get("mailboxIds").and_then(|m| m.as_object()) {
-                    if let Some(new_mb_id_str) = mb_ids.keys().next() {
-                        if let Ok(new_mb_id) = Uuid::parse_str(new_mb_id_str) {
-                            let _ = sqlx::query(
-                                "UPDATE messages SET mailbox_id = $1 WHERE id = $2 AND account_id = $3",
-                            )
-                            .bind(new_mb_id)
-                            .bind(msg_id)
-                            .bind(account_id)
-                            .execute(repo.pool())
-                            .await;
+                    if let Some(keywords) = patch.get("keywords").and_then(|k| k.as_object()) {
+                        if let Some(seen) = keywords.get("$seen").and_then(|v| v.as_bool()) {
+                            flags.is_unread = Some(!seen);
+                        }
+                        if let Some(flagged) = keywords.get("$flagged").and_then(|v| v.as_bool()) {
+                            flags.is_flagged = Some(flagged);
                         }
                     }
-                }
 
-                if let Ok(Some(msg)) = repo.update_message_flags(msg_id, is_unread, is_flagged).await {
-                    event_bus.publish(MailboxEvent {
-                        account_id,
-                        mailbox_id: msg.mailbox_id,
-                        event_type: MailboxEventType::Updated,
-                        uid: msg.uid,
-                        modseq: msg.modseq,
-                    });
-                    updated.insert(id_str.clone(), json!({}));
+                    // Handle move to different mailbox
+                    if let Some(mb_ids) = patch.get("mailboxIds").and_then(|m| m.as_object()) {
+                        if let Some(new_mb_id_str) = mb_ids.keys().next() {
+                            if let Ok(new_mb_id) = Uuid::parse_str(new_mb_id_str) {
+                                if new_mb_id != current_mb_id {
+                                    let _ = repo.copy_or_move_message(current_mb_id, new_mb_id, current_uid, true).await;
+                                }
+                            }
+                        }
+                    }
+
+                    if let Ok(Some(updated_junc)) = repo.update_message_flags(current_mb_id, current_uid, flags).await {
+                        event_bus.publish(MailboxEvent {
+                            account_id,
+                            mailbox_id: current_mb_id,
+                            event_type: MailboxEventType::Updated,
+                            uid: updated_junc.uid,
+                            modseq: updated_junc.modseq,
+                        });
+                        updated.insert(id_str.clone(), json!({}));
+                    }
                 }
             }
         }
@@ -350,8 +379,13 @@ pub async fn handle_email_set(
         for id_val in destroy_list {
             if let Some(id_str) = id_val.as_str() {
                 if let Ok(msg_id) = Uuid::parse_str(id_str) {
-                    let msg_opt = sqlx::query_as::<_, crate::db::Message>(
-                        "SELECT * FROM messages WHERE id = $1 AND account_id = $2",
+                    let junc_opt = sqlx::query_as::<_, (Uuid, i32, String)>(
+                        r#"
+                        SELECT mm.mailbox_id, mm.uid, m.blob_id
+                        FROM message_mailboxes mm
+                        JOIN messages m ON m.id = mm.message_id
+                        WHERE mm.message_id = $1 AND m.account_id = $2
+                        "#,
                     )
                     .bind(msg_id)
                     .bind(account_id)
@@ -359,20 +393,25 @@ pub async fn handle_email_set(
                     .await
                     .unwrap_or(None);
 
-                    if let Some(msg) = msg_opt {
-                        let _ = sqlx::query("DELETE FROM messages WHERE id = $1")
-                            .bind(msg.id)
+                    if let Some((mb_id, uid, blob_id)) = junc_opt {
+                        let _ = sqlx::query("DELETE FROM message_mailboxes WHERE message_id = $1")
+                            .bind(msg_id)
                             .execute(repo.pool())
                             .await;
 
-                        let _ = repo.release_blob(&msg.blob_id).await;
+                        let _ = sqlx::query("DELETE FROM messages WHERE id = $1")
+                            .bind(msg_id)
+                            .execute(repo.pool())
+                            .await;
+
+                        let _ = repo.release_blob(&blob_id).await;
 
                         event_bus.publish(MailboxEvent {
                             account_id,
-                            mailbox_id: msg.mailbox_id,
+                            mailbox_id: mb_id,
                             event_type: MailboxEventType::Expunged,
-                            uid: msg.uid,
-                            modseq: msg.modseq + 1,
+                            uid,
+                            modseq: 1,
                         });
                         destroyed.push(json!(id_str));
                     }

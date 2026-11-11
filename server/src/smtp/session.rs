@@ -1,44 +1,118 @@
 use super::inbound::process_inbound_mail;
 use crate::auth::argon::verify_password;
-use crate::db::{Account, MailRepository, NewMessage};
+use crate::db::{Account, MailRepository, NewIncomingMessage};
 use crate::event_bus::EventBus;
+use crate::security::SecurityManager;
 use crate::storage::BlobStorage;
+use crate::tls::TlsManager;
 use mail_parser::MessageParser;
 use sha2::{Digest, Sha256};
+use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use std::task::{Context, Poll};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf};
 use tokio::net::TcpStream;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 pub struct SmtpState {
     pub repo: MailRepository,
     pub storage: Arc<dyn BlobStorage>,
     pub event_bus: EventBus,
+    pub tls_manager: TlsManager,
+    pub security: SecurityManager,
     pub hostname: String,
     pub is_submission: bool,
 }
 
+pub enum MaybeTlsStream {
+    Plain(TcpStream),
+    Tls(tokio_rustls::server::TlsStream<TcpStream>),
+}
+
+impl AsyncRead for MaybeTlsStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_read(cx, buf),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for MaybeTlsStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_write(cx, buf),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_flush(cx),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(s) => Pin::new(s).poll_shutdown(cx),
+            MaybeTlsStream::Tls(s) => Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
 pub async fn handle_smtp_session(
-    stream: TcpStream,
+    initial_stream: MaybeTlsStream,
+    remote_addr: SocketAddr,
     state: Arc<SmtpState>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (reader, mut writer) = stream.into_split();
-    let mut lines = BufReader::new(reader).lines();
+    // 1. IP Ban & Connection Rate Limiting
+    let remote_ip = remote_addr.ip();
+    if let Err(err) = state.security.check_connect(remote_ip).await {
+        warn!("Rejecting connection from {}: {}", remote_addr, err);
+        let mut stream = initial_stream;
+        let _ = stream.write_all(b"421 4.7.0 Service not available, closing transmission channel\r\n").await;
+        let _ = stream.shutdown().await;
+        return Ok(());
+    }
 
-    // 1. Initial Greeting
-    writer
+    let is_implicit_tls = matches!(initial_stream, MaybeTlsStream::Tls(_));
+    let mut current_stream = initial_stream;
+    let mut is_tls = is_implicit_tls;
+
+    // Greeting
+    current_stream
         .write_all(format!("220 {} ESMTP Postarc Mailserver\r\n", state.hostname).as_bytes())
         .await?;
 
+    let (r, w) = tokio::io::split(current_stream);
+    let mut reader = BufReader::new(r);
+    let mut writer = w;
+
     let mut mail_from: Option<String> = None;
     let mut rcpt_to: Vec<String> = Vec::new();
-    let mut is_authenticated = !state.is_submission; // Port 25 doesn't require client auth
+    let mut is_authenticated = false;
     let mut auth_account: Option<Account> = None;
 
-    while let Some(line) = lines.next_line().await? {
+    loop {
+        let mut line = String::new();
+        let bytes_read = reader.read_line(&mut line).await?;
+        if bytes_read == 0 {
+            break;
+        }
+
         let trimmed = line.trim();
-        debug!("SMTP RECV: {}", trimmed);
+        debug!("SMTP [{}] RECV: {}", remote_addr, trimmed);
 
         let upper = trimmed.to_uppercase();
 
@@ -47,22 +121,78 @@ pub async fn handle_smtp_session(
                 "250-{} Hello\r\n250-8BITMIME\r\n250-SMTPUTF8\r\n250-SIZE 52428800\r\n",
                 state.hostname
             );
-            if state.is_submission && !is_authenticated {
+
+            if !is_tls {
+                response.push_str("250-STARTTLS\r\n");
+            }
+
+            if state.is_submission && is_tls && !is_authenticated {
                 response.push_str("250-AUTH PLAIN LOGIN\r\n");
             }
+
             response.push_str("250 HELP\r\n");
             writer.write_all(response.as_bytes()).await?;
+        } else if upper == "STARTTLS" {
+            if is_tls {
+                writer.write_all(b"503 5.5.1 TLS already active\r\n").await?;
+                continue;
+            }
+
+            let acceptor_opt = state.tls_manager.get_acceptor().await;
+            let Some(acceptor) = acceptor_opt else {
+                writer.write_all(b"454 4.7.0 TLS not available on this server\r\n").await?;
+                continue;
+            };
+
+            writer.write_all(b"220 2.0.0 Ready to start TLS\r\n").await?;
+            writer.flush().await?;
+
+            // Reconstruct stream from split halves
+            let r_inner = reader.into_inner();
+            let unsplit_stream = r_inner.unsplit(writer);
+
+            let tcp = match unsplit_stream {
+                MaybeTlsStream::Plain(s) => s,
+                MaybeTlsStream::Tls(_) => unreachable!(),
+            };
+
+            match acceptor.accept(tcp).await {
+                Ok(tls_stream) => {
+                    info!("STARTTLS negotiation successful with {}", remote_addr);
+                    let new_maybe = MaybeTlsStream::Tls(tls_stream);
+                    let (new_r, new_w) = tokio::io::split(new_maybe);
+                    reader = BufReader::new(new_r);
+                    writer = new_w;
+                    is_tls = true;
+                    // Per RFC 3207: Reset session state upon TLS start
+                    mail_from = None;
+                    rcpt_to.clear();
+                    is_authenticated = false;
+                    auth_account = None;
+                }
+                Err(e) => {
+                    error!("TLS handshake failed with {}: {}", remote_addr, e);
+                    return Ok(());
+                }
+            }
         } else if upper.starts_with("AUTH PLAIN") {
+            if state.is_submission && !is_tls {
+                writer.write_all(b"538 5.7.11 Encryption required for requested authentication mechanism\r\n").await?;
+                continue;
+            }
+
             let parts: Vec<&str> = trimmed.split_whitespace().collect();
             let auth_str = if parts.len() > 2 {
                 parts[2].to_string()
             } else {
                 writer.write_all(b"334 \r\n").await?;
-                lines.next_line().await?.unwrap_or_default()
+                let mut buf = String::new();
+                reader.read_line(&mut buf).await?;
+                buf
             };
 
+            let mut authed = false;
             if let Ok(decoded) = base64_decode(auth_str.trim()) {
-                // SASL PLAIN format: \0username\0password
                 let tokens: Vec<&[u8]> = decoded.split(|&b| b == 0).collect();
                 if tokens.len() >= 3 {
                     let user = String::from_utf8_lossy(tokens[1]);
@@ -72,21 +202,34 @@ pub async fn handle_smtp_session(
                         if verify_password(&pass, &acc.password_hash) {
                             is_authenticated = true;
                             auth_account = Some(acc);
-                            writer.write_all(b"235 2.7.0 Authentication successful\r\n").await?;
-                            continue;
+                            authed = true;
                         }
                     }
                 }
             }
-            writer.write_all(b"535 5.7.8 Authentication credentials invalid\r\n").await?;
-        } else if upper.starts_with("AUTH LOGIN") {
-            // Send base64 prompt for "Username:"
-            writer.write_all(b"334 VXNlcm5hbWU6\r\n").await?;
-            let user_b64 = lines.next_line().await?.unwrap_or_default();
-            // Send base64 prompt for "Password:"
-            writer.write_all(b"334 UGFzc3dvcmQ6\r\n").await?;
-            let pass_b64 = lines.next_line().await?.unwrap_or_default();
 
+            if authed {
+                state.security.record_auth_success(&remote_ip).await;
+                writer.write_all(b"235 2.7.0 Authentication successful\r\n").await?;
+            } else {
+                state.security.record_auth_failure(remote_ip).await;
+                writer.write_all(b"535 5.7.8 Authentication credentials invalid\r\n").await?;
+            }
+        } else if upper.starts_with("AUTH LOGIN") {
+            if state.is_submission && !is_tls {
+                writer.write_all(b"538 5.7.11 Encryption required for requested authentication mechanism\r\n").await?;
+                continue;
+            }
+
+            writer.write_all(b"334 VXNlcm5hbWU6\r\n").await?;
+            let mut user_b64 = String::new();
+            reader.read_line(&mut user_b64).await?;
+
+            writer.write_all(b"334 UGFzc3dvcmQ6\r\n").await?;
+            let mut pass_b64 = String::new();
+            reader.read_line(&mut pass_b64).await?;
+
+            let mut authed = false;
             if let (Ok(user_bytes), Ok(pass_bytes)) = (base64_decode(user_b64.trim()), base64_decode(pass_b64.trim())) {
                 let user = String::from_utf8_lossy(&user_bytes);
                 let pass = String::from_utf8_lossy(&pass_bytes);
@@ -95,141 +238,160 @@ pub async fn handle_smtp_session(
                     if verify_password(&pass, &acc.password_hash) {
                         is_authenticated = true;
                         auth_account = Some(acc);
-                        writer.write_all(b"235 2.7.0 Authentication successful\r\n").await?;
-                        continue;
+                        authed = true;
                     }
                 }
             }
-            writer.write_all(b"535 5.7.8 Authentication credentials invalid\r\n").await?;
+
+            if authed {
+                state.security.record_auth_success(&remote_ip).await;
+                writer.write_all(b"235 2.7.0 Authentication successful\r\n").await?;
+            } else {
+                state.security.record_auth_failure(remote_ip).await;
+                writer.write_all(b"535 5.7.8 Authentication credentials invalid\r\n").await?;
+            }
         } else if upper.starts_with("MAIL FROM:") {
             let addr = parse_address(trimmed);
-            mail_from = Some(addr);
-            writer.write_all(b"250 2.1.0 Sender OK\r\n").await?;
-        } else if upper.starts_with("RCPT TO:") {
             if state.is_submission && !is_authenticated {
                 writer.write_all(b"530 5.7.0 Authentication required\r\n").await?;
                 continue;
             }
-            let addr = parse_address(trimmed);
-            rcpt_to.push(addr);
-            writer.write_all(b"250 2.1.5 Recipient OK\r\n").await?;
+            mail_from = Some(addr);
+            writer.write_all(b"250 2.1.0 Sender OK\r\n").await?;
+        } else if upper.starts_with("RCPT TO:") {
+            let addr = parse_address(trimmed).to_lowercase();
+
+            if !is_authenticated {
+                if state.is_submission {
+                    writer.write_all(b"530 5.7.0 Authentication required\r\n").await?;
+                    continue;
+                }
+
+                // Strict Anti-Relay Guard: Recipient MUST resolve to local domain/alias
+                match state.repo.resolve_recipient(&addr).await {
+                    Ok(Some(_)) => {
+                        rcpt_to.push(addr);
+                        writer.write_all(b"250 2.1.5 Recipient OK\r\n").await?;
+                    }
+                    Ok(None) => {
+                        warn!("Anti-Relay: Blocked attempt from {} to send to non-local {}", remote_addr, addr);
+                        writer.write_all(b"554 5.7.1 Relay access denied\r\n").await?;
+                    }
+                    Err(e) => {
+                        error!("Database error during recipient check: {}", e);
+                        writer.write_all(b"451 4.3.0 Internal lookup failure\r\n").await?;
+                    }
+                }
+            } else {
+                // Authenticated submission client: allowed to send to any address
+                rcpt_to.push(addr);
+                writer.write_all(b"250 2.1.5 Recipient OK\r\n").await?;
+            }
         } else if upper == "DATA" {
             if mail_from.is_none() || rcpt_to.is_empty() {
-                writer.write_all(b"503 5.5.1 Error: need MAIL and RCPT commands\r\n").await?;
+                writer.write_all(b"503 5.5.1 Error: need MAIL FROM and RCPT TO commands\r\n").await?;
                 continue;
             }
 
             writer.write_all(b"354 Start mail input; end with <CRLF>.<CRLF>\r\n").await?;
 
             let mut message_bytes = Vec::new();
-            while let Some(data_line) = lines.next_line().await? {
-                if data_line == "." {
+            loop {
+                let mut data_line = String::new();
+                let n = reader.read_line(&mut data_line).await?;
+                if n == 0 {
                     break;
                 }
-                // Handle dot-unstuffing
-                let line_to_write = if data_line.starts_with("..") {
-                    &data_line[1..]
+
+                let line_str = data_line.trim_end_matches(['\r', '\n']);
+                if line_str == "." {
+                    break;
+                }
+
+                // Dot-unstuffing
+                let line_to_write = if line_str.starts_with("..") {
+                    &line_str[1..]
                 } else {
-                    &data_line
+                    line_str
                 };
+
                 message_bytes.extend_from_slice(line_to_write.as_bytes());
                 message_bytes.extend_from_slice(b"\r\n");
             }
 
-            let mut delivered_id = None;
-            let mut relay_rejected = false;
+            let mut delivery_success = false;
 
-            for recipient in &rcpt_to {
-                let clean_rcpt = recipient
-                    .trim()
-                    .trim_start_matches('<')
-                    .trim_end_matches('>')
-                    .to_lowercase();
-
-                // 1. Check if recipient is local
-                if let Ok(Some(_)) = state.repo.get_account_by_email(&clean_rcpt).await {
+            if !is_authenticated {
+                // Inbound delivery for local recipients
+                let sender = mail_from.clone().unwrap_or_else(|| "mailer-daemon@localhost".to_string());
+                for recipient in &rcpt_to {
                     match process_inbound_mail(
                         &state.repo,
                         &state.storage,
                         &state.event_bus,
-                        &clean_rcpt,
+                        recipient,
+                        &sender,
+                        Some(remote_ip),
+                        &state.hostname,
                         &message_bytes,
                     )
                     .await
                     {
-                        Ok(id) => delivered_id = Some(id),
+                        Ok(id) => {
+                            delivery_success = true;
+                            info!("Delivered inbound message [{}] to {}", id, recipient);
+                        }
                         Err(e) => {
-                            error!("Failed to deliver locally to {}: {}", clean_rcpt, e);
+                            warn!("Inbound delivery rejected for {}: {}", recipient, e);
                         }
                     }
-                } else if is_authenticated {
-                    // 2. Outbound relay from authenticated submission client
-                    let sender_acc = if let Some(ref acc) = auth_account {
-                        acc.clone()
-                    } else if let Some(ref from_addr) = mail_from {
-                        state
-                            .repo
-                            .get_account_by_email(from_addr)
-                            .await
-                            .ok()
-                            .flatten()
-                            .unwrap_or_else(|| Account {
-                                id: Uuid::nil(),
-                                email: from_addr.clone(),
-                                username: from_addr.clone(),
-                                password_hash: String::new(),
-                                is_active: true,
-                                quota_bytes: 10737418240,
-                                created_at: chrono::Utc::now(),
-                            })
-                    } else {
-                        continue;
-                    };
+                }
+            } else {
+                // Authenticated outbound submission
+                let sender_acc = auth_account.clone().unwrap();
+                let sender_addr = mail_from.clone().unwrap_or_else(|| sender_acc.email.clone());
 
-                    let mut hasher = Sha256::new();
-                    hasher.update(&message_bytes);
-                    let blob_id = hex::encode(hasher.finalize());
+                let mut hasher = Sha256::new();
+                hasher.update(&message_bytes);
+                let blob_id = hex::encode(hasher.finalize());
 
-                    let _ = state.storage.put_blob(&blob_id, &message_bytes).await;
-                    let _ = state.repo.reserve_blob(&blob_id, message_bytes.len() as i64).await;
+                let _ = state.storage.put_blob(&blob_id, &message_bytes).await;
+                let _ = state.repo.reserve_blob(&blob_id, message_bytes.len() as i64, message_bytes.len() as i64, "zstd").await;
 
-                    let parsed = MessageParser::default().parse(&message_bytes);
-                    let subject = parsed
-                        .as_ref()
-                        .and_then(|p| p.subject())
-                        .unwrap_or("(No Subject)")
-                        .to_string();
-                    let snippet = parsed
-                        .as_ref()
-                        .and_then(|p| p.body_text(0))
-                        .map(|s| s.chars().take(150).collect::<String>())
-                        .unwrap_or_default();
+                let parsed = MessageParser::default().parse(&message_bytes);
+                let subject = parsed.as_ref().and_then(|p| p.subject()).unwrap_or("(No Subject)").to_string();
+                let snippet = parsed.as_ref().and_then(|p| p.body_text(0)).map(|s| s.chars().take(150).collect::<String>()).unwrap_or_default();
+                let rfc822_id = parsed.as_ref().and_then(|p| p.message_id()).unwrap_or("").to_string();
 
-                    let sent_mb = state.repo.get_mailbox_by_role(sender_acc.id, "sent").await.ok().flatten();
-                    let mb_id = sent_mb.map(|m| m.id).unwrap_or(sender_acc.id);
+                let sent_mb = state.repo.get_mailbox_by_role(sender_acc.id, "sent").await.ok().flatten();
+                let mb_id = sent_mb.map(|m| m.id).unwrap_or(sender_acc.id);
 
-                    let sender_addr = mail_from.clone().unwrap_or_else(|| sender_acc.email.clone());
-                    let new_msg = NewMessage {
-                        account_id: sender_acc.id,
-                        mailbox_id: mb_id,
-                        blob_id: blob_id.clone(),
-                        thread_id: None,
-                        subject,
-                        from_address: sender_addr.clone(),
-                        to_addresses: clean_rcpt.clone(),
-                        cc_addresses: None,
-                        bcc_addresses: None,
-                        reply_to: None,
-                        date: chrono::Utc::now(),
-                        size_bytes: message_bytes.len() as i64,
-                        is_unread: false,
-                        is_flagged: false,
-                        is_draft: false,
-                        keywords: vec!["$seen".to_string()],
-                        snippet,
-                    };
+                let incoming = NewIncomingMessage {
+                    account_id: sender_acc.id,
+                    mailbox_id: mb_id,
+                    blob_id: blob_id.clone(),
+                    rfc822_message_id: if rfc822_id.is_empty() { format!("<{}@{}>", Uuid::new_v4(), state.hostname) } else { rfc822_id },
+                    in_reply_to: String::new(),
+                    references: Vec::new(),
+                    subject,
+                    from_address: sender_addr.clone(),
+                    from_name: String::new(),
+                    to_addresses: rcpt_to.join(", "),
+                    cc_addresses: None,
+                    bcc_addresses: None,
+                    reply_to: None,
+                    date: chrono::Utc::now(),
+                    size_bytes: message_bytes.len() as i64,
+                    snippet,
+                    has_attachments: false,
+                    is_unread: false,
+                    is_flagged: false,
+                    is_draft: false,
+                    keywords: vec!["$seen".to_string()],
+                };
 
-                    if let Ok(inserted) = state.repo.insert_message(new_msg).await {
+                if let Ok((inserted_msg, _)) = state.repo.insert_message_with_junction(incoming).await {
+                    for recipient in &rcpt_to {
                         let submission_id = Uuid::new_v4();
                         let _ = sqlx::query(
                             r#"
@@ -239,32 +401,24 @@ pub async fn handle_smtp_session(
                         )
                         .bind(submission_id)
                         .bind(sender_acc.id)
-                        .bind(inserted.id)
+                        .bind(inserted_msg.id)
                         .bind(&sender_addr)
-                        .bind(&clean_rcpt)
+                        .bind(recipient)
                         .execute(state.repo.pool())
                         .await;
 
-                        delivered_id = Some(inserted.id);
-                        info!("Enqueued outbound email [{}] to {}", submission_id, clean_rcpt);
+                        info!("Queued outbound submission [{}] to {}", submission_id, recipient);
                     }
-                } else {
-                    // Unauthenticated external attempt to send to non-local address
-                    relay_rejected = true;
+                    delivery_success = true;
                 }
             }
 
-            if let Some(id) = delivered_id {
-                writer
-                    .write_all(format!("250 2.0.0 Ok: queued as {}\r\n", id).as_bytes())
-                    .await?;
-            } else if relay_rejected {
-                writer.write_all(b"550 5.7.1 Relay access denied\r\n").await?;
+            if delivery_success {
+                writer.write_all(b"250 2.0.0 Ok: queued for delivery\r\n").await?;
             } else {
-                writer.write_all(b"550 5.1.1 Recipient user not found\r\n").await?;
+                writer.write_all(b"550 5.1.1 Delivery failed for all recipients\r\n").await?;
             }
 
-            // Reset state after DATA
             mail_from = None;
             rcpt_to.clear();
         } else if upper == "RSET" {

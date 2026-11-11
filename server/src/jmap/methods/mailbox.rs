@@ -15,14 +15,14 @@ pub async fn handle_mailbox_get(
     let mut list = Vec::new();
 
     for mb in mailboxes {
-        // Query counts for this mailbox
+        // Query counts for this mailbox via junction table message_mailboxes
         let counts: Result<(i64, i64), sqlx::Error> = sqlx::query_as(
             r#"
             SELECT 
                 COUNT(*)::bigint as total,
-                COUNT(CASE WHEN is_unread THEN 1 END)::bigint as unread
-            FROM messages
-            WHERE mailbox_id = $1
+                COUNT(CASE WHEN mm.is_unread THEN 1 END)::bigint as unread
+            FROM message_mailboxes mm
+            WHERE mm.mailbox_id = $1 AND mm.is_deleted = false
             "#,
         )
         .bind(mb.id)

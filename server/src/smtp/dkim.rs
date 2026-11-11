@@ -18,13 +18,15 @@ pub struct DkimManager {
 impl DkimManager {
     pub fn new(domain: String, selector: String) -> Self {
         let candidate_paths = [
-            "/data/dkim/mail.private",
-            "data/dkim/mail.private",
-            "./data/dkim/mail.private",
+            format!("/data/dkim/{}_{}.private", domain, selector),
+            format!("data/dkim/{}_{}.private", domain, selector),
+            "/data/dkim/mail.private".to_string(),
+            "data/dkim/mail.private".to_string(),
+            "./data/dkim/mail.private".to_string(),
         ];
 
         let mut key_pem = None;
-        for path in candidate_paths {
+        for path in &candidate_paths {
             if Path::new(path).exists() {
                 if let Ok(bytes) = std::fs::read(path) {
                     info!("Loaded DKIM private key from {}", path);
@@ -35,13 +37,21 @@ impl DkimManager {
         }
 
         if key_pem.is_none() {
-            warn!("DKIM private key not found in data/dkim/mail.private; outbound signing disabled.");
+            warn!("DKIM private key not found on disk; outbound signing disabled unless DB key provided.");
         }
 
         Self {
             domain,
             selector,
             key_pem,
+        }
+    }
+
+    pub fn from_pem(domain: String, selector: String, pem: &[u8]) -> Self {
+        Self {
+            domain,
+            selector,
+            key_pem: Some(pem.to_vec()),
         }
     }
 

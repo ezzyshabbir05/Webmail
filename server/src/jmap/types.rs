@@ -32,6 +32,7 @@ pub struct JmapAccount {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JmapRequest {
+    #[allow(dead_code)]
     pub using: Vec<String>,
     pub method_calls: Vec<(String, Value, String)>,
 }

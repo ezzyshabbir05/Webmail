@@ -12,7 +12,9 @@ pub struct PostarcConfig {
 
     // Bind Addresses
     pub smtp_bind_addr: SocketAddr,
+    pub smtps_bind_addr: SocketAddr,
     pub submission_bind_addr: SocketAddr,
+    pub imap_bind_addr: SocketAddr,
     pub imaps_bind_addr: SocketAddr,
     pub jmap_bind_addr: SocketAddr,
 
@@ -55,10 +57,20 @@ impl PostarcConfig {
             .parse()
             .unwrap_or_else(|_| "0.0.0.0:25".parse().unwrap());
 
+        let smtps_bind_addr = env::var("SMTPS_BIND_ADDR")
+            .unwrap_or_else(|_| "0.0.0.0:465".to_string())
+            .parse()
+            .unwrap_or_else(|_| "0.0.0.0:465".parse().unwrap());
+
         let submission_bind_addr = env::var("SUBMISSION_BIND_ADDR")
             .unwrap_or_else(|_| "0.0.0.0:587".to_string())
             .parse()
             .unwrap_or_else(|_| "0.0.0.0:587".parse().unwrap());
+
+        let imap_bind_addr = env::var("IMAP_BIND_ADDR")
+            .unwrap_or_else(|_| "0.0.0.0:143".to_string())
+            .parse()
+            .unwrap_or_else(|_| "0.0.0.0:143".parse().unwrap());
 
         let imaps_bind_addr = env::var("IMAPS_BIND_ADDR")
             .unwrap_or_else(|_| "0.0.0.0:993".to_string())
@@ -101,7 +113,9 @@ impl PostarcConfig {
             admin_password,
             database_url,
             smtp_bind_addr,
+            smtps_bind_addr,
             submission_bind_addr,
+            imap_bind_addr,
             imaps_bind_addr,
             jmap_bind_addr,
             storage_backend,

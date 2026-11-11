@@ -1,15 +1,18 @@
 use crate::auth::argon::verify_password;
-use crate::db::{Account, MailRepository, Mailbox};
+use crate::db::{Account, FlagUpdates, MailRepository, Mailbox};
 use crate::event_bus::{EventBus, MailboxEventType};
 use crate::storage::BlobStorage;
+use crate::tls::TlsManager;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tracing::debug;
 
+#[allow(dead_code)]
 pub struct ImapState {
     pub repo: MailRepository,
     pub storage: Arc<dyn BlobStorage>,
     pub event_bus: EventBus,
+    pub tls_manager: TlsManager,
     pub hostname: String,
 }
 
@@ -25,7 +28,7 @@ where
 
     // Initial IMAP greeting
     writer
-        .write_all(b"* OK [CAPABILITY IMAP4rev2 IMAP4rev1 IDLE MOVE SPECIAL-USE] Postarc IMAP Service ready\r\n")
+        .write_all(b"* OK [CAPABILITY IMAP4rev2 IMAP4rev1 IDLE MOVE SPECIAL-USE NAMESPACE] Postarc IMAP Service ready\r\n")
         .await?;
 
     let mut authenticated_account: Option<Account> = None;
@@ -46,10 +49,18 @@ where
         match command.as_str() {
             "CAPABILITY" => {
                 writer
-                    .write_all(b"* CAPABILITY IMAP4rev2 IMAP4rev1 IDLE MOVE SPECIAL-USE\r\n")
+                    .write_all(b"* CAPABILITY IMAP4rev2 IMAP4rev1 IDLE MOVE SPECIAL-USE NAMESPACE\r\n")
                     .await?;
                 writer
                     .write_all(format!("{} OK CAPABILITY completed\r\n", tag).as_bytes())
+                    .await?;
+            }
+            "NAMESPACE" => {
+                writer
+                    .write_all(b"* NAMESPACE ((\"\" \"/\")) NIL NIL\r\n")
+                    .await?;
+                writer
+                    .write_all(format!("{} OK NAMESPACE completed\r\n", tag).as_bytes())
                     .await?;
             }
             "LOGIN" => {
@@ -102,6 +113,35 @@ where
                 }
                 writer.write_all(format!("{} OK LIST completed\r\n", tag).as_bytes()).await?;
             }
+            "STATUS" => {
+                let acc = match &authenticated_account {
+                    Some(a) => a,
+                    None => {
+                        writer.write_all(format!("{} BAD Not authenticated\r\n", tag).as_bytes()).await?;
+                        continue;
+                    }
+                };
+
+                let mb_name = if parts.len() > 2 { clean_param(parts[2]) } else { "INBOX".to_string() };
+                let mailboxes = state.repo.list_mailboxes(acc.id).await.unwrap_or_default();
+                let found = mailboxes
+                    .into_iter()
+                    .find(|m| m.name.eq_ignore_ascii_case(&mb_name) || (mb_name.eq_ignore_ascii_case("INBOX") && m.role.as_deref() == Some("inbox")));
+
+                if let Some(mb) = found {
+                    let messages = state.repo.list_messages_in_mailbox(mb.id, 10000, 0).await.unwrap_or_default();
+                    let unseen_count = messages.iter().filter(|m| m.is_unread).count();
+                    writer
+                        .write_all(format!(
+                            "* STATUS \"{}\" (MESSAGES {} UNSEEN {} UIDNEXT {} UIDVALIDITY {} HIGHESTMODSEQ {})\r\n",
+                            mb.name, messages.len(), unseen_count, mb.next_uid, mb.uid_validity, mb.highest_modseq
+                        ).as_bytes())
+                        .await?;
+                    writer.write_all(format!("{} OK STATUS completed\r\n", tag).as_bytes()).await?;
+                } else {
+                    writer.write_all(format!("{} NO [NONEXISTENT] Mailbox not found\r\n", tag).as_bytes()).await?;
+                }
+            }
             "SELECT" => {
                 let acc = match &authenticated_account {
                     Some(a) => a,
@@ -118,7 +158,7 @@ where
                     .find(|m| m.name.eq_ignore_ascii_case(&mb_name) || (mb_name.eq_ignore_ascii_case("INBOX") && m.role.as_deref() == Some("inbox")));
 
                 if let Some(mb) = found {
-                    let messages = state.repo.list_messages(mb.id, 1000, 0).await.unwrap_or_default();
+                    let messages = state.repo.list_messages_in_mailbox(mb.id, 10000, 0).await.unwrap_or_default();
                     let count = messages.len();
 
                     let res = format!(
@@ -137,16 +177,16 @@ where
                 let is_uid_cmd = command == "UID";
                 let actual_cmd = if is_uid_cmd && parts.len() > 2 { parts[2].to_uppercase() } else { command.clone() };
 
-                if actual_cmd == "FETCH" {
-                    let mb = match &selected_mailbox {
-                        Some(m) => m,
-                        None => {
-                            writer.write_all(format!("{} BAD No mailbox selected\r\n", tag).as_bytes()).await?;
-                            continue;
-                        }
-                    };
+                let mb = match &selected_mailbox {
+                    Some(m) => m,
+                    None => {
+                        writer.write_all(format!("{} BAD No mailbox selected\r\n", tag).as_bytes()).await?;
+                        continue;
+                    }
+                };
 
-                    let messages = state.repo.list_messages(mb.id, 50, 0).await.unwrap_or_default();
+                if actual_cmd == "FETCH" {
+                    let messages = state.repo.list_messages_in_mailbox(mb.id, 100, 0).await.unwrap_or_default();
 
                     for (idx, msg) in messages.iter().enumerate() {
                         let seq = idx + 1;
@@ -160,9 +200,14 @@ where
                         if msg.is_draft {
                             flags_str.push_str("\\Draft ");
                         }
+                        if msg.is_deleted {
+                            flags_str.push_str("\\Deleted ");
+                        }
+                        if msg.is_answered {
+                            flags_str.push_str("\\Answered ");
+                        }
                         let flags_trimmed = flags_str.trim();
 
-                        // Check if BODY[] was requested
                         let line_upper = trimmed.to_uppercase();
                         if line_upper.contains("BODY[]") || line_upper.contains("RFC822") {
                             if let Ok(body_bytes) = state.storage.get_blob(&msg.blob_id).await {
@@ -185,9 +230,90 @@ where
                     }
 
                     writer.write_all(format!("{} OK FETCH completed\r\n", tag).as_bytes()).await?;
+                } else if actual_cmd == "STORE" {
+                    // UID STORE <range> +/-FLAGS (\Seen)
+                    let flags_arg = trimmed.to_uppercase();
+                    let mut flag_updates = FlagUpdates::default();
+                    if flags_arg.contains("\\SEEN") {
+                        flag_updates.is_unread = Some(false);
+                    }
+                    if flags_arg.contains("\\FLAGGED") {
+                        flag_updates.is_flagged = Some(true);
+                    }
+                    if flags_arg.contains("\\DELETED") {
+                        flag_updates.is_deleted = Some(true);
+                    }
+
+                    if is_uid_cmd && parts.len() > 3 {
+                        if let Ok(target_uid) = parts[3].parse::<i32>() {
+                            let _ = state.repo.update_message_flags(mb.id, target_uid, flag_updates).await;
+                        }
+                    }
+                    writer.write_all(format!("{} OK STORE completed\r\n", tag).as_bytes()).await?;
+                } else if actual_cmd == "COPY" || actual_cmd == "MOVE" {
+                    let is_move = actual_cmd == "MOVE";
+                    let target_mb_name = parts.last().unwrap_or(&"");
+                    let clean_target = clean_param(target_mb_name);
+
+                    let acc = authenticated_account.as_ref().unwrap();
+                    let mailboxes = state.repo.list_mailboxes(acc.id).await.unwrap_or_default();
+                    if let Some(dest_mb) = mailboxes.into_iter().find(|m| m.name.eq_ignore_ascii_case(&clean_target)) {
+                        if is_uid_cmd && parts.len() > 3 {
+                            if let Ok(target_uid) = parts[3].parse::<i32>() {
+                                let _ = state.repo.copy_or_move_message(mb.id, dest_mb.id, target_uid, is_move).await;
+                            }
+                        }
+                        writer.write_all(format!("{} OK {} completed\r\n", tag, actual_cmd).as_bytes()).await?;
+                    } else {
+                        writer.write_all(format!("{} NO [NONEXISTENT] Destination not found\r\n", tag).as_bytes()).await?;
+                    }
+                } else if actual_cmd == "EXPUNGE" {
+                    if let Ok(expunged_uids) = state.repo.expunge_mailbox(mb.id).await {
+                        for uid in expunged_uids {
+                            writer.write_all(format!("* {} EXPUNGE\r\n", uid).as_bytes()).await?;
+                        }
+                    }
+                    writer.write_all(format!("{} OK EXPUNGE completed\r\n", tag).as_bytes()).await?;
+                } else if actual_cmd == "SEARCH" {
+                    let messages = state.repo.list_messages_in_mailbox(mb.id, 1000, 0).await.unwrap_or_default();
+                    let mut matched_ids = Vec::new();
+                    let upper_line = trimmed.to_uppercase();
+
+                    for (idx, msg) in messages.iter().enumerate() {
+                        let id = if is_uid_cmd { msg.uid } else { (idx + 1) as i32 };
+                        if upper_line.contains("UNSEEN") {
+                            if msg.is_unread { matched_ids.push(id); }
+                        } else if upper_line.contains("SEEN") {
+                            if !msg.is_unread { matched_ids.push(id); }
+                        } else if upper_line.contains("FLAGGED") {
+                            if msg.is_flagged { matched_ids.push(id); }
+                        } else {
+                            matched_ids.push(id);
+                        }
+                    }
+
+                    let search_res = matched_ids.into_iter().map(|i| i.to_string()).collect::<Vec<_>>().join(" ");
+                    writer.write_all(format!("* SEARCH {}\r\n", search_res).as_bytes()).await?;
+                    writer.write_all(format!("{} OK SEARCH completed\r\n", tag).as_bytes()).await?;
                 } else {
                     writer.write_all(format!("{} OK completed\r\n", tag).as_bytes()).await?;
                 }
+            }
+            "EXPUNGE" => {
+                let mb = match &selected_mailbox {
+                    Some(m) => m,
+                    None => {
+                        writer.write_all(format!("{} BAD No mailbox selected\r\n", tag).as_bytes()).await?;
+                        continue;
+                    }
+                };
+
+                if let Ok(expunged_uids) = state.repo.expunge_mailbox(mb.id).await {
+                    for uid in expunged_uids {
+                        writer.write_all(format!("* {} EXPUNGE\r\n", uid).as_bytes()).await?;
+                    }
+                }
+                writer.write_all(format!("{} OK EXPUNGE completed\r\n", tag).as_bytes()).await?;
             }
             "IDLE" => {
                 let mb = match &selected_mailbox {
@@ -198,9 +324,7 @@ where
                     }
                 };
 
-                // Advertise continuation
                 writer.write_all(b"+ idling\r\n").await?;
-
                 let mut rx = state.event_bus.subscribe();
 
                 loop {
@@ -220,8 +344,7 @@ where
                             if let Ok(evt) = event_res {
                                 if evt.mailbox_id == mb.id {
                                     if evt.event_type == MailboxEventType::Created {
-                                        // Broadcast unsolicited exists
-                                        let current_count = state.repo.list_messages(mb.id, 1000, 0).await.map(|m| m.len()).unwrap_or(1);
+                                        let current_count = state.repo.list_messages_in_mailbox(mb.id, 10000, 0).await.map(|m| m.len()).unwrap_or(1);
                                         writer.write_all(format!("* {} EXISTS\r\n", current_count).as_bytes()).await?;
                                     }
                                 }

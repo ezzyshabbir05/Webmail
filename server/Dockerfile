@@ -29,8 +29,11 @@ RUN apt-get update && \
 WORKDIR /app
 
 COPY --from=builder /app/target/release/postarc-server /app/postarc-server
+RUN ln -s /app/postarc-server /usr/local/bin/postarc && \
+    ln -s /app/postarc-server /usr/local/bin/postarc-server
 
-# Standard Mail & JMAP Ports
-EXPOSE 25 465 587 993 8080 4190
+# Standard Mail & JMAP Ports:
+# 25 (SMTP), 143 (IMAP), 465 (SMTPS), 587 (Submission), 993 (IMAPS), 8080 (JMAP/HTTP)
+EXPOSE 25 143 465 587 993 8080 4190
 
 CMD ["/app/postarc-server"]
