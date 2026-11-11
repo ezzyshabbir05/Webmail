@@ -30,16 +30,16 @@ pub async fn handle_submission_set(
                                 recipients.push(trimmed.to_string());
                             }
                         }
-                        if let Some(ref cc) = msg.cc_addresses {
-                            for r in cc.split(',') {
+                        if !msg.cc_addresses.is_empty() {
+                            for r in msg.cc_addresses.split(',') {
                                 let trimmed = r.trim().trim_start_matches('<').trim_end_matches('>').trim();
                                 if !trimmed.is_empty() && !recipients.contains(&trimmed.to_string()) {
                                     recipients.push(trimmed.to_string());
                                 }
                             }
                         }
-                        if let Some(ref bcc) = msg.bcc_addresses {
-                            for r in bcc.split(',') {
+                        if !msg.bcc_addresses.is_empty() {
+                            for r in msg.bcc_addresses.split(',') {
                                 let trimmed = r.trim().trim_start_matches('<').trim_end_matches('>').trim();
                                 if !trimmed.is_empty() && !recipients.contains(&trimmed.to_string()) {
                                     recipients.push(trimmed.to_string());

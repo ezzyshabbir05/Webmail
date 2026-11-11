@@ -1,12 +1,11 @@
 use crate::auth::argon::verify_password;
-use crate::db::{Account, MailRepository, Mailbox, Message};
+use crate::db::{Account, MailRepository, Mailbox};
 use crate::event_bus::{EventBus, MailboxEventType};
 use crate::storage::BlobStorage;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use tracing::{debug, error, info};
-use uuid::Uuid;
+use tracing::debug;
 
 pub struct ImapState {
     pub repo: MailRepository,
