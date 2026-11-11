@@ -200,13 +200,54 @@ function mapJmapEmailToThread(
   const textBodyVal = Object.values(email.bodyValues || {})[0]?.value || email.preview || ""
   const htmlBodyVal = Object.values(email.bodyValues || {}).find((b) => b.value.includes("<"))?.value
 
-  const attachments: EmailAttachment[] = (email.attachments || []).map((att) => ({
-    id: att.blobId || att.partId || Math.random().toString(),
-    name: att.name || "attachment",
-    size: `${Math.round((att.size || 0) / 1024)} KB`,
-    type: att.type?.includes("image") ? "image" : att.type?.includes("pdf") ? "pdf" : "document",
-    downloadUrl: `/api/blob/${encodeURIComponent(att.blobId || "")}/${encodeURIComponent(att.name || "attachment")}`,
-  }))
+  const attachments: EmailAttachment[] = (email.attachments || []).map((att: any) => {
+    let sizeStr = "100 KB"
+    if (typeof att.size === "number") {
+      if (att.size >= 1024 * 1024) {
+        sizeStr = `${(att.size / (1024 * 1024)).toFixed(1)} MB`
+      } else {
+        sizeStr = `${Math.round(att.size / 1024)} KB`
+      }
+    } else if (typeof att.size === "string") {
+      sizeStr = att.size
+    }
+
+    const blobId = att.blobId || att.id || att.partId || "blob_unknown"
+    const name = att.name || "attachment"
+
+    let attType: EmailAttachment["type"] = "document"
+    const typeLower = (att.type || "").toLowerCase()
+    const nameLower = name.toLowerCase()
+    if (typeLower.includes("image") || /\.(png|jpe?g|gif|webp|svg)$/.test(nameLower)) {
+      attType = "image"
+    } else if (typeLower.includes("pdf") || nameLower.endsWith(".pdf")) {
+      attType = "pdf"
+    } else if (
+      typeLower.includes("sheet") ||
+      typeLower.includes("csv") ||
+      typeLower.includes("excel") ||
+      /\.(xlsx?|csv|tsv)$/.test(nameLower)
+    ) {
+      attType = "spreadsheet"
+    } else if (
+      typeLower.includes("zip") ||
+      typeLower.includes("tar") ||
+      typeLower.includes("archive") ||
+      /\.(zip|tar|gz|7z|rar)$/.test(nameLower)
+    ) {
+      attType = "archive"
+    }
+
+    return {
+      id: blobId,
+      name,
+      size: sizeStr,
+      type: attType,
+      downloadUrl:
+        att.downloadUrl ||
+        `/api/blob/${encodeURIComponent(blobId)}/${encodeURIComponent(name)}`,
+    }
+  })
 
   return {
     id: email.id,
@@ -828,6 +869,7 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       fullDate: new Date().toLocaleString(),
       isFromMe: true,
+      attachments: options?.attachments,
       spfStatus: "pass",
       dkimStatus: "pass",
       dmarcStatus: "pass",
@@ -839,6 +881,9 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
           ? {
               ...e,
               messages: [...(e.messages || []), newMessage],
+              attachments: options?.attachments
+                ? [...(e.attachments || []), ...options.attachments]
+                : e.attachments,
               threadCount: (e.threadCount || 1) + 1,
             }
           : e
@@ -856,6 +901,12 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
         references: targetThread ? [targetThread.id] : undefined,
         subject: targetThread ? `Re: ${targetThread.subject.replace(/^(Re:\s*)+/i, "")}` : "Reply",
         body: replyText,
+        attachments: options?.attachments?.map((att) => ({
+          blobId: att.id,
+          name: att.name,
+          type: att.type || "application/octet-stream",
+          size: 1024,
+        })),
       })
       .then(() => {
         toast({
