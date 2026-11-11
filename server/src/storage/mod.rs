@@ -79,6 +79,7 @@ pub fn spawn_blob_gc_worker(repo: MailRepository, storage: Arc<dyn BlobStorage>)
 
             match candidates {
                 Ok(rows) => {
+                    let count = rows.len();
                     for row in rows {
                         let sha = row.0;
                         if let Err(e) = storage.delete_blob(&sha).await {
@@ -90,6 +91,7 @@ pub fn spawn_blob_gc_worker(repo: MailRepository, storage: Arc<dyn BlobStorage>)
                                 .await;
                         }
                     }
+                    info!("Garbage collection sweep completed (purged {} expired blobs).", count);
                 }
                 Err(e) => {
                     error!("Error querying pending purge blobs: {}", e);

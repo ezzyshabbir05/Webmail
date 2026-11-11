@@ -218,15 +218,35 @@ export function MailProvider({ children }: { children: React.ReactNode }) {
   const [isComposeOpen, setIsComposeOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
 
-  const [identities, setIdentities] = useState<MailIdentity[]>([
-    {
+  const getInitialIdentity = (): MailIdentity => {
+    if (typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem("postarc_user")
+        if (stored) {
+          const data = JSON.parse(stored)
+          if (data.email) {
+            return {
+              id: data.accountId || data.email,
+              name: data.username || data.email.split("@")[0] || "User",
+              email: data.email,
+              isDefault: true,
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return {
       id: "id_default",
-      name: "Postarc User",
-      email: "user@postarc.local",
+      name: "User",
+      email: "",
       isDefault: true,
-    },
-  ])
-  const [activeIdentity, setActiveIdentity] = useState<MailIdentity>(identities[0])
+    }
+  }
+
+  const [identities, setIdentities] = useState<MailIdentity[]>([getInitialIdentity()])
+  const [activeIdentity, setActiveIdentity] = useState<MailIdentity>(getInitialIdentity())
 
   const [vacationSettings, setVacationSettings] = useState({
     isEnabled: false,

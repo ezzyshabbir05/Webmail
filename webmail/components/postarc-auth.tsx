@@ -35,28 +35,53 @@ export function PostarcAuth({ onSuccess }: PostarcAuthProps) {
     setIsLoading(true)
     setErrorMessage(null)
 
-    setTimeout(() => {
-      try {
-        const cleanEmail = email.trim().toLowerCase()
-        const accountId = cleanEmail.split("@")[0] || "admin"
-        const sessionData = {
+    try {
+      const cleanEmail = email.trim().toLowerCase()
+      const baseUrl = typeof window !== "undefined" ? window.location.origin : ""
+
+      const res = await fetch(`${baseUrl}/api/auth/login`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
           email: cleanEmail,
-          accountId,
-          serverUrl: serverUrl.trim() || (typeof window !== "undefined" ? window.location.origin : ""),
-          authenticated: true,
-        }
+          password: password,
+        }),
+      })
 
-        if (typeof window !== "undefined") {
-          localStorage.setItem("postarc_user", JSON.stringify(sessionData))
-        }
-
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}))
+        setErrorMessage(errorData.error || "Invalid email or password")
         setIsLoading(false)
-        onSuccess()
-      } catch (err) {
-        setErrorMessage(err instanceof Error ? err.message : "Error initializing session")
-        setIsLoading(false)
+        return
       }
-    }, 300)
+
+      const data = await res.json()
+      if (typeof window !== "undefined") {
+        if (data.token) {
+          localStorage.setItem("postarc_token", data.token)
+        }
+        localStorage.setItem(
+          "postarc_user",
+          JSON.stringify({
+            email: data.account?.email || cleanEmail,
+            accountId: data.account?.id || cleanEmail.split("@")[0],
+            username: data.account?.username || cleanEmail.split("@")[0],
+            authenticated: true,
+          })
+        )
+        // Clear any stale mock data cached from previous sessions
+        localStorage.removeItem("postarc_emails")
+        localStorage.removeItem("postarc_mailboxes")
+      }
+
+      setIsLoading(false)
+      onSuccess()
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Network error contacting mail server")
+      setIsLoading(false)
+    }
   }
 
   return (

@@ -252,7 +252,8 @@ async fn deliver_via_smtp(
     }
 
     // 4. Send RCPT TO
-    writer.write_all(format!("RCPT TO:<{}>\r\n", recipient).as_bytes()).await?;
+    let clean_rcpt = recipient.trim().trim_start_matches('<').trim_end_matches('>');
+    writer.write_all(format!("RCPT TO:<{}>\r\n", clean_rcpt).as_bytes()).await?;
     let resp = lines.next_line().await?.unwrap_or_default();
     if !resp.starts_with("250") {
         return Err(format!("RCPT TO rejected: {}", resp).into());

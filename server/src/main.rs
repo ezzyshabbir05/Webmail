@@ -91,6 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             storage: storage.clone(),
             event_bus: event_bus.clone(),
             default_admin_email: config.admin_email.clone(),
+            jwt_secret: config.jwt_secret.clone(),
         };
 
         let jmap_bind_addr = config.jmap_bind_addr;
@@ -163,7 +164,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    info!("Postarc daemon core initialized. Awaiting shutdown signal...");
+    info!("===============================================================");
+    info!(" Postarc Mailserver daemon is fully ONLINE and serving traffic!");
+    info!("   - SMTP Inbound (MTA):         Port 25");
+    info!("   - SMTP Submission (STARTTLS): Port 587");
+    info!("   - IMAP4rev2:                  Port 993");
+    info!("   - JMAP & Webmail API:         Port 8080");
+    info!("===============================================================");
+    info!("Awaiting client connections and messages (Press Ctrl+C to stop)...");
 
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {

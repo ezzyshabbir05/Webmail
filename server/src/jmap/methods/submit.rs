@@ -23,25 +23,56 @@ pub async fn handle_submission_set(
                     .unwrap_or(None);
 
                     if let Some(msg) = msg_opt {
-                        let submission_id = Uuid::new_v4();
-                        let _ = sqlx::query(
-                            r#"
-                            INSERT INTO outbound_queue (id, account_id, message_id, sender, recipient, status)
-                            VALUES ($1, $2, $3, $4, $5, 'queued')
-                            "#,
-                        )
-                        .bind(submission_id)
-                        .bind(account_id)
-                        .bind(msg.id)
-                        .bind(&msg.from_address)
-                        .bind(&msg.to_addresses)
-                        .execute(repo.pool())
-                        .await;
+                        let mut recipients = Vec::new();
+                        for r in msg.to_addresses.split(',') {
+                            let trimmed = r.trim().trim_start_matches('<').trim_end_matches('>').trim();
+                            if !trimmed.is_empty() && !recipients.contains(&trimmed.to_string()) {
+                                recipients.push(trimmed.to_string());
+                            }
+                        }
+                        if let Some(ref cc) = msg.cc_addresses {
+                            for r in cc.split(',') {
+                                let trimmed = r.trim().trim_start_matches('<').trim_end_matches('>').trim();
+                                if !trimmed.is_empty() && !recipients.contains(&trimmed.to_string()) {
+                                    recipients.push(trimmed.to_string());
+                                }
+                            }
+                        }
+                        if let Some(ref bcc) = msg.bcc_addresses {
+                            for r in bcc.split(',') {
+                                let trimmed = r.trim().trim_start_matches('<').trim_end_matches('>').trim();
+                                if !trimmed.is_empty() && !recipients.contains(&trimmed.to_string()) {
+                                    recipients.push(trimmed.to_string());
+                                }
+                            }
+                        }
 
+                        let mut first_submission_id = None;
+                        for rcpt in &recipients {
+                            let submission_id = Uuid::new_v4();
+                            if first_submission_id.is_none() {
+                                first_submission_id = Some(submission_id);
+                            }
+                            let _ = sqlx::query(
+                                r#"
+                                INSERT INTO outbound_queue (id, account_id, message_id, sender, recipient, status)
+                                VALUES ($1, $2, $3, $4, $5, 'queued')
+                                "#,
+                            )
+                            .bind(submission_id)
+                            .bind(account_id)
+                            .bind(msg.id)
+                            .bind(&msg.from_address)
+                            .bind(rcpt)
+                            .execute(repo.pool())
+                            .await;
+                        }
+
+                        let sid = first_submission_id.unwrap_or_else(Uuid::new_v4);
                         created.insert(
                             temp_id.clone(),
                             json!({
-                                "id": submission_id.to_string(),
+                                "id": sid.to_string(),
                                 "sendAt": chrono::Utc::now().to_rfc3339()
                             }),
                         );

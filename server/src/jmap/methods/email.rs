@@ -1,6 +1,7 @@
 use crate::db::MailRepository;
 use crate::event_bus::{EventBus, MailboxEvent, MailboxEventType};
 use crate::storage::BlobStorage;
+use mail_parser::MessageParser;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
@@ -8,6 +9,7 @@ use uuid::Uuid;
 
 pub async fn handle_email_get(
     repo: &MailRepository,
+    storage: &Arc<dyn BlobStorage>,
     account_id: Uuid,
     args: Value,
 ) -> Result<Value, String> {
@@ -56,6 +58,22 @@ pub async fn handle_email_get(
             keywords.insert(kw, json!(true));
         }
 
+        let (body_val, is_html) = if let Ok(blob_bytes) = storage.get_blob(&msg.blob_id).await {
+            if let Some(parsed) = MessageParser::default().parse(&blob_bytes) {
+                if let Some(html) = parsed.body_html(0) {
+                    (html.to_string(), true)
+                } else if let Some(text) = parsed.body_text(0) {
+                    (text.to_string(), false)
+                } else {
+                    (msg.snippet.clone(), false)
+                }
+            } else {
+                (String::from_utf8_lossy(&blob_bytes).to_string(), false)
+            }
+        } else {
+            (msg.snippet.clone(), false)
+        };
+
         list.push(json!({
             "id": msg.id.to_string(),
             "blobId": msg.blob_id,
@@ -71,13 +89,13 @@ pub async fn handle_email_get(
             "hasAttachment": false,
             "bodyValues": {
                 "1": {
-                    "value": msg.snippet,
+                    "value": body_val,
                     "isTruncated": false
                 }
             },
             "textBody": [{
                 "partId": "1",
-                "type": "text/plain",
+                "type": if is_html { "text/html" } else { "text/plain" },
                 "size": msg.size_bytes
             }]
         }));
@@ -99,10 +117,15 @@ pub async fn handle_email_query(
     let position = args.get("position").and_then(|v| v.as_i64()).unwrap_or(0);
 
     let filter = args.get("filter");
-    let in_mailbox = filter
-        .and_then(|f| f.get("inMailbox"))
-        .and_then(|v| v.as_str())
-        .and_then(|s| Uuid::parse_str(s).ok());
+    let in_mailbox = if let Some(s) = filter.and_then(|f| f.get("inMailbox")).and_then(|v| v.as_str()) {
+        if let Ok(u) = Uuid::parse_str(s) {
+            Some(u)
+        } else {
+            repo.get_mailbox_by_role(account_id, s).await.ok().flatten().map(|m| m.id)
+        }
+    } else {
+        None
+    };
 
     let text_query = filter
         .and_then(|f| f.get("text"))
@@ -117,19 +140,21 @@ pub async fn handle_email_query(
             .await
             .map_err(|e| format!("List error: {}", e))?
     } else {
-        // Query inbox by default
-        let inbox = repo
-            .get_mailbox_by_role(account_id, "inbox")
-            .await
-            .map_err(|e| format!("Inbox error: {}", e))?;
-
-        if let Some(mb) = inbox {
-            repo.list_messages(mb.id, limit, position)
-                .await
-                .map_err(|e| format!("List error: {}", e))?
-        } else {
-            Vec::new()
-        }
+        // Query all messages for this account across mailboxes
+        sqlx::query_as::<_, crate::db::Message>(
+            r#"
+            SELECT * FROM messages
+            WHERE account_id = $1
+            ORDER BY date DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(account_id)
+        .bind(limit)
+        .bind(position)
+        .fetch_all(repo.pool())
+        .await
+        .map_err(|e| format!("List error: {}", e))?
     };
 
     let ids: Vec<String> = messages.into_iter().map(|m| m.id.to_string()).collect();

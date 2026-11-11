@@ -25,10 +25,10 @@ const INITIAL_MAILBOXES: JmapMailbox[] = [
     parentId: null,
     role: "inbox",
     sortOrder: 1,
-    totalEmails: 6,
-    unreadEmails: 3,
-    totalThreads: 6,
-    unreadThreads: 3,
+    totalEmails: 0,
+    unreadEmails: 0,
+    totalThreads: 0,
+    unreadThreads: 0,
     myRights: {
       mayReadItems: true,
       mayAddItems: true,
@@ -48,10 +48,10 @@ const INITIAL_MAILBOXES: JmapMailbox[] = [
     parentId: null,
     role: "starred",
     sortOrder: 2,
-    totalEmails: 2,
-    unreadEmails: 1,
-    totalThreads: 2,
-    unreadThreads: 1,
+    totalEmails: 0,
+    unreadEmails: 0,
+    totalThreads: 0,
+    unreadThreads: 0,
     myRights: {
       mayReadItems: true,
       mayAddItems: true,
@@ -71,9 +71,9 @@ const INITIAL_MAILBOXES: JmapMailbox[] = [
     parentId: null,
     role: "sent",
     sortOrder: 3,
-    totalEmails: 2,
+    totalEmails: 0,
     unreadEmails: 0,
-    totalThreads: 2,
+    totalThreads: 0,
     unreadThreads: 0,
     myRights: {
       mayReadItems: true,
@@ -94,9 +94,9 @@ const INITIAL_MAILBOXES: JmapMailbox[] = [
     parentId: null,
     role: "drafts",
     sortOrder: 4,
-    totalEmails: 1,
+    totalEmails: 0,
     unreadEmails: 0,
-    totalThreads: 1,
+    totalThreads: 0,
     unreadThreads: 0,
     myRights: {
       mayReadItems: true,
@@ -117,9 +117,9 @@ const INITIAL_MAILBOXES: JmapMailbox[] = [
     parentId: null,
     role: "archive",
     sortOrder: 5,
-    totalEmails: 2,
+    totalEmails: 0,
     unreadEmails: 0,
-    totalThreads: 2,
+    totalThreads: 0,
     unreadThreads: 0,
     myRights: {
       mayReadItems: true,
@@ -140,10 +140,10 @@ const INITIAL_MAILBOXES: JmapMailbox[] = [
     parentId: null,
     role: "spam",
     sortOrder: 6,
-    totalEmails: 1,
-    unreadEmails: 1,
-    totalThreads: 1,
-    unreadThreads: 1,
+    totalEmails: 0,
+    unreadEmails: 0,
+    totalThreads: 0,
+    unreadThreads: 0,
     myRights: {
       mayReadItems: true,
       mayAddItems: true,
@@ -163,9 +163,9 @@ const INITIAL_MAILBOXES: JmapMailbox[] = [
     parentId: null,
     role: "trash",
     sortOrder: 7,
-    totalEmails: 1,
+    totalEmails: 0,
     unreadEmails: 0,
-    totalThreads: 1,
+    totalThreads: 0,
     unreadThreads: 0,
     myRights: {
       mayReadItems: true,
@@ -180,141 +180,13 @@ const INITIAL_MAILBOXES: JmapMailbox[] = [
     },
     isSubscribed: true,
   },
-  {
-    id: "mb_projects",
-    name: "Engineering & Design",
-    parentId: null,
-    role: null,
-    sortOrder: 8,
-    totalEmails: 2,
-    unreadEmails: 1,
-    totalThreads: 2,
-    unreadThreads: 1,
-    myRights: {
-      mayReadItems: true,
-      mayAddItems: true,
-      mayRemoveItems: true,
-      maySetSeen: true,
-      maySetKeywords: true,
-      mayCreateChild: true,
-      mayRename: true,
-      mayDelete: true,
-      maySubmit: true,
-    },
-    isSubscribed: true,
-  },
-  {
-    id: "mb_finance",
-    name: "Invoices & Billing",
-    parentId: null,
-    role: null,
-    sortOrder: 9,
-    totalEmails: 1,
-    unreadEmails: 0,
-    totalThreads: 1,
-    unreadThreads: 0,
-    myRights: {
-      mayReadItems: true,
-      mayAddItems: true,
-      mayRemoveItems: true,
-      maySetSeen: true,
-      maySetKeywords: true,
-      mayCreateChild: true,
-      mayRename: true,
-      mayDelete: true,
-      maySubmit: true,
-    },
-    isSubscribed: true,
-  },
 ]
 
 const INITIAL_EMAILS: JmapEmail[] = []
 
-const INITIAL_IDENTITIES: JmapIdentity[] = [
-  {
-    id: "id_admin",
-    name: "Admin",
-    email: "admin@example.com",
-    replyTo: [{ name: "Admin", email: "admin@example.com" }],
-    textSignature: "-- \nPostarc Webmail | Postarc",
-    htmlSignature: "<p>--<br/><strong>Postarc Webmail</strong> | Postarc</p>",
-    mayDelete: false,
-  },
-]
-
-const INITIAL_CONTACTS: JmapContactCard[] = [
-  {
-    id: "c1",
-    name: { full: "Elena Rostova", given: "Elena", surname: "Rostova" },
-    emails: { primary: { address: "elena.rostova@example.com" } },
-    phones: { primary: { number: "+1-555-0192" } },
-    organizations: { primary: { name: "Postarc", title: "VP of Engineering" } },
-  },
-  {
-    id: "c2",
-    name: { full: "Marcus Vance", given: "Marcus", surname: "Vance" },
-    emails: { primary: { address: "marcus.vance@example.com" } },
-    phones: { primary: { number: "+1-555-0144" } },
-    organizations: { primary: { name: "Postarc", title: "Staff Frontend Architect" } },
-  },
-  {
-    id: "c3",
-    name: { full: "Sarah Chen", given: "Sarah", surname: "Chen" },
-    emails: { primary: { address: "sarah.chen@example.com" } },
-    phones: { primary: { number: "+1-555-0188" } },
-    organizations: { primary: { name: "Postarc", title: "Principal Product Designer" } },
-  },
-  {
-    id: "c4",
-    name: { full: "Astryx Support", given: "Astryx", surname: "Support" },
-    emails: { primary: { address: "hello@astryxdesign.org" } },
-    organizations: { primary: { name: "Astryx Project", title: "Design Systems Support" } },
-  },
-  {
-    id: "c5",
-    name: { full: "Stripe Billing", given: "Stripe", surname: "Billing" },
-    emails: { primary: { address: "invoices@stripe.com" } },
-    organizations: { primary: { name: "Stripe, Inc." } },
-  },
-]
-
-const INITIAL_CALENDAR_EVENTS: JmapCalendarEvent[] = [
-  {
-    id: "ev1",
-    title: "Q4 Product & Architecture Sync",
-    start: new Date(Date.now() + 1000 * 60 * 60 * 2).toISOString(),
-    duration: "PT1H",
-    description: "Review Astryx design tokens, standalone frontend performance, and roadmap milestones.",
-    locations: { loc1: { name: "Virtual Meeting (Google Meet)" } },
-    participants: {
-      p1: { name: "Elena Rostova", email: "elena.rostova@example.com" },
-      p2: { name: "Admin", email: "admin@example.com" },
-    },
-  },
-  {
-    id: "ev2",
-    title: "Design System Token Review",
-    start: new Date(Date.now() + 1000 * 60 * 60 * 6).toISOString(),
-    duration: "PT1H",
-    description: "Review color contrast, dark mode elevation tokens, and button focus rings.",
-    locations: { loc1: { name: "Design Room A" } },
-    participants: {
-      p1: { name: "Sarah Chen", email: "sarah.chen@example.com" },
-      p2: { name: "Admin", email: "admin@example.com" },
-    },
-  },
-  {
-    id: "ev3",
-    title: "Weekly Frontend Sprint Demo",
-    start: new Date(Date.now() + 1000 * 60 * 60 * 28).toISOString(),
-    duration: "PT1H",
-    description: "Demonstration of pure frontend Postarc Webmail and Astryx components.",
-    locations: { loc1: { name: "Main Auditorium" } },
-    participants: {
-      p1: { name: "Team", email: "team@example.com" },
-    },
-  },
-]
+const INITIAL_IDENTITIES: JmapIdentity[] = []
+const INITIAL_CONTACTS: JmapContactCard[] = []
+const INITIAL_CALENDAR_EVENTS: JmapCalendarEvent[] = []
 
 export class PostarcClient {
   private session: JmapSession | null = null
@@ -410,15 +282,30 @@ export class PostarcClient {
 
   public async fetchLiveJmap(method: string, args: Record<string, unknown>): Promise<unknown | null> {
     try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" }
+      if (typeof window !== "undefined") {
+        const token = localStorage.getItem("postarc_token")
+        if (token) {
+          headers["Authorization"] = `Bearer ${token}`
+        }
+      }
+
       const res = await fetch(`${this.getBackendUrl()}/api/jmap`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
           using: ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:mail"],
           methodCalls: [[method, args, "c0"]],
         }),
       })
-      if (!res.ok) return null
+      if (!res.ok) {
+        if (res.status === 401 && typeof window !== "undefined") {
+          localStorage.removeItem("postarc_token")
+          localStorage.removeItem("postarc_user")
+          window.location.reload()
+        }
+        return null
+      }
       const json = await res.json()
       return json?.methodResponses?.[0]?.[1] || null
     } catch {
@@ -440,16 +327,7 @@ export class PostarcClient {
     try {
       const live = (await this.fetchLiveJmap("Mailbox/get", {})) as { list?: JmapMailbox[] } | null
       if (live?.list && live.list.length > 0) {
-        for (const lmb of live.list) {
-          const idx = this.mailboxes.findIndex(
-            (m) => m.id === lmb.id || (m.role && m.role === lmb.role)
-          )
-          if (idx >= 0) {
-            this.mailboxes[idx] = { ...this.mailboxes[idx], ...lmb }
-          } else {
-            this.mailboxes.push(lmb)
-          }
-        }
+        this.mailboxes = live.list
         this.saveToStorage()
       }
     } catch {
@@ -463,6 +341,12 @@ export class PostarcClient {
     update?: Record<string, Partial<JmapMailbox>>
     destroy?: string[]
   }): Promise<Record<string, unknown>> {
+    try {
+      await this.fetchLiveJmap("Mailbox/set", params)
+    } catch {
+      // offline fallback
+    }
+
     if (params.create) {
       for (const [, mbData] of Object.entries(params.create)) {
         const newMb: JmapMailbox = {
@@ -584,6 +468,19 @@ export class PostarcClient {
       mailboxIds?: Record<string, boolean>
     }
   ): Promise<void> {
+    try {
+      await this.fetchLiveJmap("Email/set", {
+        update: {
+          [emailId]: {
+            ...(updates.keywords ? { keywords: updates.keywords } : {}),
+            ...(updates.mailboxIds ? { mailboxIds: updates.mailboxIds } : {}),
+          },
+        },
+      })
+    } catch {
+      // offline fallback
+    }
+
     this.emails = this.emails.map((e) => {
       if (e.id !== emailId) return e
       const newKeywords = { ...e.keywords }
@@ -606,6 +503,14 @@ export class PostarcClient {
   }
 
   public async destroyEmails(emailIds: string[]): Promise<void> {
+    try {
+      await this.fetchLiveJmap("Email/set", {
+        destroy: emailIds,
+      })
+    } catch {
+      // offline fallback
+    }
+
     this.emails = this.emails.filter((e) => !emailIds.includes(e.id))
     this.saveToStorage()
   }
@@ -724,6 +629,39 @@ export class PostarcClient {
   }
 
   public async getIdentities(): Promise<JmapIdentity[]> {
+    try {
+      const live = (await this.fetchLiveJmap("Identity/get", {})) as { list?: JmapIdentity[] } | null
+      if (live?.list && live.list.length > 0) {
+        this.identities = live.list
+        return [...this.identities]
+      }
+    } catch {
+      // offline fallback
+    }
+
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("postarc_user")
+      if (stored) {
+        try {
+          const user = JSON.parse(stored)
+          if (user.email) {
+            return [
+              {
+                id: user.accountId || "id_user",
+                name: user.username || user.email.split("@")[0] || "User",
+                email: user.email,
+                textSignature: "-- \nSent via Postarc Webmail",
+                htmlSignature: "<div>-- <br>Sent via Postarc Webmail</div>",
+                mayDelete: false,
+              },
+            ]
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
     return [...this.identities]
   }
 

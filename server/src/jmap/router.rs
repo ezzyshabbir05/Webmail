@@ -2,6 +2,8 @@ use super::methods::*;
 use super::session::build_session;
 use super::sse::handle_sse;
 use super::types::{JmapRequest, JmapResponse};
+use crate::auth::argon::verify_password;
+use crate::auth::jwt::{create_token, verify_token};
 use crate::db::MailRepository;
 use crate::event_bus::EventBus;
 use crate::storage::BlobStorage;
@@ -13,12 +15,13 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -27,6 +30,13 @@ pub struct AppState {
     pub storage: Arc<dyn BlobStorage>,
     pub event_bus: EventBus,
     pub default_admin_email: String,
+    pub jwt_secret: String,
+}
+
+#[derive(Deserialize)]
+struct LoginPayload {
+    email: String,
+    password: String,
 }
 
 pub fn create_router(state: AppState) -> Router {
@@ -36,6 +46,7 @@ pub fn create_router(state: AppState) -> Router {
         .allow_headers(Any);
 
     Router::new()
+        .route("/api/auth/login", post(post_auth_login))
         .route("/.well-known/jmap", get(get_session))
         .route("/api/jmap", post(post_jmap))
         .route("/api/events", get(get_events))
@@ -54,34 +65,106 @@ pub async fn run_jmap_server(bind_addr: SocketAddr, state: AppState) -> Result<(
     Ok(())
 }
 
-async fn get_default_account(state: &AppState) -> (Uuid, String) {
-    if let Ok(Some(acc)) = state.repo.get_account_by_email(&state.default_admin_email).await {
-        (acc.id, acc.email)
-    } else {
-        (Uuid::nil(), state.default_admin_email.clone())
+async fn post_auth_login(
+    State(state): State<AppState>,
+    Json(body): Json<LoginPayload>,
+) -> Response {
+    let clean_email = body.email.trim().to_lowercase();
+    match state.repo.get_account_by_email(&clean_email).await {
+        Ok(Some(account)) => {
+            if verify_password(&body.password, &account.password_hash) {
+                match create_token(account.id, &account.email, &state.jwt_secret) {
+                    Ok(token) => {
+                        info!("Successful webmail authentication for {}", account.email);
+                        (
+                            StatusCode::OK,
+                            Json(json!({
+                                "token": token,
+                                "account": {
+                                    "id": account.id.to_string(),
+                                    "email": account.email,
+                                    "username": account.username
+                                }
+                            })),
+                        )
+                            .into_response()
+                    }
+                    Err(e) => {
+                        warn!("Failed to generate JWT for {}: {}", account.email, e);
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(json!({ "error": "Token generation error" })),
+                        )
+                            .into_response()
+                    }
+                }
+            } else {
+                warn!("Authentication failed (invalid password) for {}", clean_email);
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({ "error": "Invalid email or password" })),
+                )
+                    .into_response()
+            }
+        }
+        _ => {
+            warn!("Authentication failed (user not found) for {}", clean_email);
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "Invalid email or password" })),
+            )
+                .into_response()
+        }
     }
 }
 
-async fn get_session(State(state): State<AppState>) -> Response {
-    let (account_id, username) = get_default_account(&state).await;
+async fn authenticate_request(headers: &HeaderMap, state: &AppState) -> Option<(Uuid, String)> {
+    if let Some(auth_header) = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()) {
+        let token = auth_header.trim_start_matches("Bearer ").trim();
+        if let Ok(claims) = verify_token(token, &state.jwt_secret) {
+            if let Ok(account_id) = Uuid::parse_str(&claims.sub) {
+                return Some((account_id, claims.email));
+            }
+        }
+    }
+    None
+}
+
+async fn get_session(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    let Some((account_id, username)) = authenticate_request(&headers, &state).await else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "type": "urn:ietf:params:jmap:error:unauthorized", "status": 401 })),
+        )
+            .into_response();
+    };
     let session = build_session(account_id, &username);
     Json(session).into_response()
 }
 
 async fn post_jmap(
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(req): Json<JmapRequest>,
 ) -> Response {
-    let (account_id, _) = get_default_account(&state).await;
+    let Some((account_id, _)) = authenticate_request(&headers, &state).await else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "type": "urn:ietf:params:jmap:error:unauthorized", "status": 401 })),
+        )
+            .into_response();
+    };
     let mut method_responses = Vec::new();
 
     for (name, args, call_id) in req.method_calls {
         let res = match name.as_str() {
             "Mailbox/get" => handle_mailbox_get(&state.repo, account_id, args).await,
             "Mailbox/set" => handle_mailbox_set(&state.repo, account_id, args).await,
-            "Email/get" => handle_email_get(&state.repo, account_id, args).await,
+            "Email/get" => handle_email_get(&state.repo, &state.storage, account_id, args).await,
             "Email/query" => handle_email_query(&state.repo, account_id, args).await,
-            "Email/set" => handle_email_set(&state.repo, &state.storage, &state.event_bus, account_id, args).await,
+            "Email/set" => {
+                handle_email_set(&state.repo, &state.storage, &state.event_bus, account_id, args).await
+            }
             "EmailSubmission/set" => handle_submission_set(&state.repo, account_id, args).await,
             "Identity/get" => handle_identity_get(&state.repo, account_id, args).await,
             _ => {
@@ -111,8 +194,14 @@ async fn post_jmap(
     .into_response()
 }
 
-async fn get_events(State(state): State<AppState>) -> Response {
-    let (account_id, _) = get_default_account(&state).await;
+async fn get_events(headers: HeaderMap, State(state): State<AppState>) -> Response {
+    let Some((account_id, _)) = authenticate_request(&headers, &state).await else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "type": "urn:ietf:params:jmap:error:unauthorized", "status": 401 })),
+        )
+            .into_response();
+    };
     handle_sse(state.event_bus.clone(), account_id).await.into_response()
 }
 

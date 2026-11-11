@@ -17,10 +17,7 @@
     # Route JMAP discovery and API calls to Postarc Mailserver backend
     @jmap {
         path /.well-known/jmap*
-        path /api/jmap*
-        path /api/events*
-        path /api/blob/*
-        path /api/upload/*
+        path /api/*
     }
     handle @jmap {
         reverse_proxy postarc-server:8080 {
