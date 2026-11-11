@@ -81,7 +81,7 @@ async fn post_jmap(
             "Mailbox/set" => handle_mailbox_set(&state.repo, account_id, args).await,
             "Email/get" => handle_email_get(&state.repo, account_id, args).await,
             "Email/query" => handle_email_query(&state.repo, account_id, args).await,
-            "Email/set" => handle_email_set(&state.repo, &state.event_bus, account_id, args).await,
+            "Email/set" => handle_email_set(&state.repo, &state.storage, &state.event_bus, account_id, args).await,
             "EmailSubmission/set" => handle_submission_set(&state.repo, account_id, args).await,
             "Identity/get" => handle_identity_get(&state.repo, account_id, args).await,
             _ => {

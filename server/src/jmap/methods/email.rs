@@ -1,6 +1,9 @@
 use crate::db::MailRepository;
 use crate::event_bus::{EventBus, MailboxEvent, MailboxEventType};
+use crate::storage::BlobStorage;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub async fn handle_email_get(
@@ -144,12 +147,134 @@ pub async fn handle_email_query(
 
 pub async fn handle_email_set(
     repo: &MailRepository,
+    storage: &Arc<dyn BlobStorage>,
     event_bus: &EventBus,
     account_id: Uuid,
     args: Value,
 ) -> Result<Value, String> {
+    let mut created = serde_json::Map::new();
     let mut updated = serde_json::Map::new();
     let mut destroyed = Vec::new();
+
+    if let Some(create_map) = args.get("create").and_then(|v| v.as_object()) {
+        for (temp_id, val) in create_map {
+            let mut target_mb_id = None;
+            if let Some(mb_ids) = val.get("mailboxIds").and_then(|m| m.as_object()) {
+                for key in mb_ids.keys() {
+                    if let Ok(u) = Uuid::parse_str(key) {
+                        target_mb_id = Some(u);
+                        break;
+                    }
+                }
+            }
+
+            if target_mb_id.is_none() {
+                if let Ok(Some(mb)) = repo.get_mailbox_by_role(account_id, "sent").await {
+                    target_mb_id = Some(mb.id);
+                } else if let Ok(Some(mb)) = repo.get_mailbox_by_role(account_id, "inbox").await {
+                    target_mb_id = Some(mb.id);
+                }
+            }
+
+            let mailbox_id = match target_mb_id {
+                Some(id) => id,
+                None => continue,
+            };
+
+            let subject = val
+                .get("subject")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(No Subject)")
+                .to_string();
+
+            let from_addr = val
+                .get("from")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|f| f.get("email"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("user@localhost")
+                .to_string();
+
+            let to_addr = val
+                .get("to")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|t| t.get("email").and_then(|e| e.as_str()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+
+            let text_val = val
+                .get("bodyValues")
+                .and_then(|bv| bv.as_object())
+                .and_then(|obj| obj.values().next())
+                .and_then(|b| b.get("value"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let snippet = text_val.chars().take(150).collect::<String>();
+
+            let raw_mime = format!(
+                "From: {}\r\nTo: {}\r\nSubject: {}\r\nDate: {}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n{}",
+                from_addr,
+                to_addr,
+                subject,
+                chrono::Utc::now().to_rfc2822(),
+                text_val
+            );
+            let payload = raw_mime.as_bytes();
+
+            let mut hasher = Sha256::new();
+            hasher.update(payload);
+            let blob_id = hex::encode(hasher.finalize());
+
+            let _ = storage.put_blob(&blob_id, payload).await;
+            let _ = repo.reserve_blob(&blob_id, payload.len() as i64).await;
+
+            let new_msg = crate::db::NewMessage {
+                account_id,
+                mailbox_id,
+                blob_id: blob_id.clone(),
+                thread_id: None,
+                subject: subject.clone(),
+                from_address: from_addr,
+                to_addresses: to_addr,
+                cc_addresses: None,
+                bcc_addresses: None,
+                reply_to: None,
+                date: chrono::Utc::now(),
+                size_bytes: payload.len() as i64,
+                is_unread: false,
+                is_flagged: false,
+                is_draft: false,
+                keywords: vec!["$seen".to_string()],
+                snippet,
+            };
+
+            if let Ok(inserted) = repo.insert_message(new_msg).await {
+                event_bus.publish(MailboxEvent {
+                    account_id,
+                    mailbox_id,
+                    event_type: MailboxEventType::Created,
+                    uid: inserted.uid,
+                    modseq: inserted.modseq,
+                });
+
+                created.insert(
+                    temp_id.clone(),
+                    json!({
+                        "id": inserted.id.to_string(),
+                        "blobId": blob_id,
+                        "threadId": inserted.thread_id.to_string(),
+                        "size": payload.len()
+                    }),
+                );
+            }
+        }
+    }
 
     if let Some(update_map) = args.get("update").and_then(|v| v.as_object()) {
         for (id_str, patch) in update_map {
@@ -235,6 +360,7 @@ pub async fn handle_email_set(
         "accountId": account_id.to_string(),
         "oldState": "1",
         "newState": "2",
+        "created": created,
         "updated": updated,
         "destroyed": destroyed
     }))

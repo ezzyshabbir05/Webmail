@@ -20,11 +20,17 @@ pub async fn process_inbound_mail(
     let blob_id = hex::encode(hasher.finalize());
 
     // 2. Locate recipient account & Inbox
+    let clean_email = recipient_email
+        .trim()
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .to_lowercase();
+
     let account = repo
-        .get_account_by_email(recipient_email)
+        .get_account_by_email(&clean_email)
         .await
         .map_err(|e| format!("DB error: {}", e))?
-        .ok_or_else(|| format!("User not found: {}", recipient_email))?;
+        .ok_or_else(|| format!("User not found: {}", clean_email))?;
 
     let inbox = repo
         .get_mailbox_by_role(account.id, "inbox")

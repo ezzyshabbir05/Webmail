@@ -12,13 +12,17 @@ pub struct S3BlobStorage {
 impl S3BlobStorage {
     pub async fn new(bucket: &str, endpoint: &str, access_key: &str, secret_key: &str) -> Self {
         let credentials = Credentials::new(access_key, secret_key, None, None, "postarc-static");
-        let config = aws_sdk_s3::Config::builder()
+        let mut builder = aws_sdk_s3::Config::builder()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
             .credentials_provider(credentials)
             .region(Region::new("auto"))
-            .endpoint_url(endpoint)
-            .force_path_style(true)
-            .build();
+            .force_path_style(true);
 
+        if !endpoint.is_empty() {
+            builder = builder.endpoint_url(endpoint);
+        }
+
+        let config = builder.build();
         let client = Client::from_conf(config);
 
         Self {

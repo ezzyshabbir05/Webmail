@@ -228,365 +228,7 @@ const INITIAL_MAILBOXES: JmapMailbox[] = [
   },
 ]
 
-const INITIAL_EMAILS: JmapEmail[] = [
-  {
-    id: "msg_elena_roadmap",
-    blobId: "blob_elena",
-    threadId: "msg_elena_roadmap",
-    mailboxIds: { inbox: true, mb_projects: true },
-    keywords: { $flagged: true },
-    size: 24576,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 18).toISOString(),
-    from: [{ name: "Elena Rostova", email: "elena.rostova@example.com" }],
-    to: [{ name: "Postarc Team", email: "team@example.com" }],
-    subject: "Q4 Engineering Roadmap & Postarc Architecture Milestone",
-    preview: "Hey team, I've reviewed the latest architecture specs and the Astryx UI implementation. Everything looks solid...",
-    bodyValues: {
-      body1: {
-        value: `Hi team,
-
-I wanted to share our Q4 engineering roadmap update. The transition to the standalone Astryx design system and our high-performance frontend architecture is progressing ahead of schedule.
-
-Key Milestones:
-1. Pure Frontend Webmail Client: Fully decoupled, zero external server bottlenecks.
-2. Astryx Design System Adherence: Token-backed layouts, dark/light theme persistence, responsive multi-pane layout.
-3. Interactive Performance: Sub-millisecond state updates, thread conversation view, and zero layout shift.
-
-Please review the attached PDF roadmap document and let me know your thoughts before our sync tomorrow at 10 AM.
-
-Best regards,
-Elena Rostova
-VP of Engineering | Postarc`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-    attachments: [
-      {
-        partId: "att_1",
-        blobId: "blob_pdf_roadmap",
-        size: 1468006,
-        name: "Q4_Engineering_Roadmap.pdf",
-        type: "application/pdf",
-      },
-    ],
-  },
-  {
-    id: "msg_astryx_welcome",
-    blobId: "blob_astryx",
-    threadId: "msg_astryx_welcome",
-    mailboxIds: { inbox: true },
-    keywords: {},
-    size: 18432,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 55).toISOString(),
-    from: [{ name: "Astryx Design System", email: "hello@astryxdesign.org" }],
-    to: [{ name: "Postarc User", email: "admin@example.com" }],
-    subject: "Welcome to Astryx Component Library & Postarc UI System",
-    preview: "Welcome to your new modern webmail experience built with 100% token-backed components and responsive layouts...",
-    bodyValues: {
-      body1: {
-        value: `Welcome to Postarc Webmail!
-
-This client is built with Astryx Design System — crafted for high density, accessible, and themeable web applications.
-
-Design Principles:
-- Layout & Spacing: Structured using VStack, HStack, AppShell, and Toolbar components.
-- Data Presentation: High-density rows with Token counts and structured metadata.
-- Theme System: Seamless dark and light modes driven by CSS variables and semantic design tokens.
-
-Feel free to customize your folders, filter your threads, and explore the keyboard shortcuts!
-
-Happy emailing!
-The Astryx Team`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-  },
-  {
-    id: "msg_github_security",
-    blobId: "blob_github",
-    threadId: "msg_github_security",
-    mailboxIds: { inbox: true },
-    keywords: {},
-    size: 12288,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 130).toISOString(),
-    from: [{ name: "GitHub Security", email: "security@github.com" }],
-    to: [{ name: "Admin", email: "admin@example.com" }],
-    subject: "[Security Alert] Token permissions updated for @Postarc/postarc-webmail",
-    preview: "A personal access token was successfully rotated and scoped for repository access. No further action is required...",
-    bodyValues: {
-      body1: {
-        value: `Security Notification
-
-A personal access token (fine-grained) associated with your organization was rotated at ${new Date().toLocaleDateString()}.
-
-Repository: Postarc/postarc-webmail
-Permissions: Contents (Read & Write), Actions (Read)
-IP Address: 187.127.171.46
-
-If you authorized this change, you do not need to take any action. If this was not you, please visit your security settings immediately.
-
-GitHub Security Operations`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-  },
-  {
-    id: "msg_cloudflare_dns",
-    blobId: "blob_cf",
-    threadId: "msg_cloudflare_dns",
-    mailboxIds: { inbox: true },
-    keywords: { $seen: true },
-    size: 15360,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 320).toISOString(),
-    from: [{ name: "Cloudflare Status", email: "notifications@cloudflare.com" }],
-    to: [{ name: "Admin", email: "admin@example.com" }],
-    subject: "Domain DNS & SSL Certificate Status for example.com",
-    preview: "Universal SSL edge certificate has been provisioned and active for mail.example.com. Zero Trust security enabled...",
-    bodyValues: {
-      body1: {
-        value: `Cloudflare Status Report
-
-Your domain example.com has completed certificate provisioning:
-- Hostname: mail.example.com
-- Status: Active (Proxied)
-- SSL/TLS: Full (Strict)
-- HTTP/3 (QUIC): Enabled
-
-All edge nodes are responding normally with 100% uptime over the past 30 days.`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-  },
-  {
-    id: "msg_figma_digest",
-    blobId: "blob_figma",
-    threadId: "msg_figma_digest",
-    mailboxIds: { inbox: true },
-    keywords: { $seen: true },
-    size: 16384,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 600).toISOString(),
-    from: [{ name: "Figma Community", email: "news@figma.com" }],
-    to: [{ name: "Design Team", email: "admin@example.com" }],
-    subject: "New Design Tokens & UI Kits available in the Community",
-    preview: "Explore this week's trending design systems, icons, and layout kits for web developers and designers...",
-    bodyValues: {
-      body1: {
-        value: `This Week in Figma Community:
-
-Check out the top community files curated for frontend developers:
-- Dark Mode Tokens Kit (kaTeX + Tailwind tokens)
-- Email Client Layout Blueprints (Gmail, Outlook, Superhuman inspired)
-- Vector Icon Packs for Product Management
-
-Open Figma to duplicate any file directly into your workspace.`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-  },
-  {
-    id: "msg_hackernews_top",
-    blobId: "blob_hn",
-    threadId: "msg_hackernews_top",
-    mailboxIds: { inbox: true },
-    keywords: { $seen: true },
-    size: 14336,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 950).toISOString(),
-    from: [{ name: "Hacker News Digest", email: "digest@hackernews.com" }],
-    to: [{ name: "Tech Enthusiast", email: "admin@example.com" }],
-    subject: "Top Tech Stories: Modern Web Frameworks & Rust in Production",
-    preview: "Here are the top discussion threads and engineering blogs from today: Rust memory safety, Next.js 16 features...",
-    bodyValues: {
-      body1: {
-        value: `Top Stories Today on Hacker News:
-
-1. Building High-Performance Webmail with Next.js & Astryx (342 points, 128 comments)
-2. Why SQLite WAL Mode is All You Need for Most Workloads (512 points, 245 comments)
-3. Zero-Allocation MIME Parsing in Modern Systems Programming (189 points, 47 comments)
-4. Designing Accessible Component Libraries from the Ground Up (275 points, 88 comments)
-
-Visit news.ycombinator.com to join the discussion.`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-  },
-  {
-    id: "msg_sent_proposal",
-    blobId: "blob_sent_1",
-    threadId: "msg_sent_proposal",
-    mailboxIds: { sent: true },
-    keywords: { $seen: true },
-    size: 12288,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 1440).toISOString(),
-    from: [{ name: "Admin", email: "admin@example.com" }],
-    to: [{ name: "Elena Rostova", email: "elena.rostova@example.com" }],
-    subject: "Re: Q4 Engineering Roadmap & Postarc Architecture Milestone",
-    preview: "Thanks Elena! The frontend is now fully standalone and using Astryx components cleanly...",
-    bodyValues: {
-      body1: {
-        value: `Hi Elena,
-
-Thanks for sharing the roadmap. I've reviewed the architecture milestones and verified that the frontend is now 100% decoupled and running smoothly.
-
-Looking forward to the sync tomorrow.
-
-Best,
-Admin`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-  },
-  {
-    id: "msg_sent_expenses",
-    blobId: "blob_sent_2",
-    threadId: "msg_sent_expenses",
-    mailboxIds: { sent: true },
-    keywords: { $seen: true },
-    size: 10240,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 2880).toISOString(),
-    from: [{ name: "Admin", email: "admin@example.com" }],
-    to: [{ name: "Finance Team", email: "finance@example.com" }],
-    subject: "Approved: November Infrastructure & Tooling Expenses",
-    preview: "All infrastructure costs and tooling licenses for this quarter are approved. Please proceed with disbursement...",
-    bodyValues: {
-      body1: {
-        value: `Hi Finance Team,
-
-The infrastructure budget for this month has been reviewed and approved.
-
-Items:
-- VPS Hosting & Edge Compute
-- DNS & Security Services
-- Developer Licenses & Design Tools
-
-Regards,
-Admin`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-  },
-  {
-    id: "msg_draft_release_notes",
-    blobId: "blob_draft_1",
-    threadId: "msg_draft_release_notes",
-    mailboxIds: { drafts: true },
-    keywords: { $seen: true },
-    size: 8192,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 720).toISOString(),
-    from: [{ name: "Admin", email: "admin@example.com" }],
-    to: [{ name: "Engineering All", email: "team@example.com" }],
-    subject: "Draft: Release Notes for Postarc Webmail v1.0",
-    preview: "We are excited to announce the initial release of Postarc Webmail featuring pure Astryx UI, dark mode...",
-    bodyValues: {
-      body1: {
-        value: `Postarc Webmail v1.0 Release Notes
-
-Highlights:
-- Pure Frontend Architecture built with Next.js and Astryx Design System
-- Full JMAP RFC 8620 / 8621 compatibility
-- Integrated Calendar, Contacts, Filter rules, and comprehensive Settings
-- Real-time client state management and dark mode theme switching`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-  },
-  {
-    id: "msg_archive_invoice",
-    blobId: "blob_invoice",
-    threadId: "msg_archive_invoice",
-    mailboxIds: { archive: true, mb_finance: true },
-    keywords: { $seen: true, $flagged: true },
-    size: 92160,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 4320).toISOString(),
-    from: [{ name: "Stripe Billing", email: "invoices@stripe.com" }],
-    to: [{ name: "Accounts Payable", email: "admin@example.com" }],
-    subject: "Receipt for your subscription payment #INV-88291",
-    preview: "Your subscription payment was successfully processed. Thank you for using our services...",
-    bodyValues: {
-      body1: {
-        value: `Receipt from Stripe
-
-Invoice: #INV-88291
-Date: November 1, 2026
-Amount: $120.00 USD
-Status: Paid
-
-Please find the detailed invoice PDF attached for your records.`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-    attachments: [
-      {
-        partId: "att_inv",
-        blobId: "blob_pdf_inv",
-        size: 84920,
-        name: "Invoice_INV-88291.pdf",
-        type: "application/pdf",
-      },
-    ],
-  },
-  {
-    id: "msg_spam_promo",
-    blobId: "blob_spam",
-    threadId: "msg_spam_promo",
-    mailboxIds: { spam: true },
-    keywords: {},
-    size: 14336,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 1800).toISOString(),
-    from: [{ name: "Bulk Domains Promo", email: "deals@bulkmailer-promo.net" }],
-    to: [{ name: "Admin", email: "admin@example.com" }],
-    subject: "Special Discount: 90% off bulk domain registrations",
-    preview: "Exclusive weekend promo for high-volume domain registrations across top level domains...",
-    bodyValues: {
-      body1: {
-        value: `Claim your 90% discount on new domain names today! Limited time offer for developer bundles.`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-  },
-  {
-    id: "msg_trash_resolved",
-    blobId: "blob_trash",
-    threadId: "msg_trash_resolved",
-    mailboxIds: { trash: true },
-    keywords: { $seen: true },
-    size: 7168,
-    receivedAt: new Date(Date.now() - 1000 * 60 * 5000).toISOString(),
-    from: [{ name: "Automated Monitor", email: "noreply@legacy-monitor.org" }],
-    to: [{ name: "Admin", email: "admin@example.com" }],
-    subject: "Old server monitor notice (Resolved)",
-    preview: "This issue has been closed and resolved automatically by the health checking daemon...",
-    bodyValues: {
-      body1: {
-        value: `Notification: Service latency restored to normal levels. Ticket has been automatically resolved.`,
-        isEncodingProblem: false,
-        isTruncated: false,
-      },
-    },
-    textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
-  },
-]
+const INITIAL_EMAILS: JmapEmail[] = []
 
 const INITIAL_IDENTITIES: JmapIdentity[] = [
   {
@@ -759,9 +401,11 @@ export class PostarcClient {
 
   private getBackendUrl(): string {
     if (typeof window !== "undefined") {
-      return (window as unknown as { NEXT_PUBLIC_POSTARC_API_URL?: string }).NEXT_PUBLIC_POSTARC_API_URL || "http://localhost:8080"
+      const custom = (window as unknown as { NEXT_PUBLIC_POSTARC_API_URL?: string }).NEXT_PUBLIC_POSTARC_API_URL || process.env.NEXT_PUBLIC_POSTARC_API_URL
+      if (custom && custom.startsWith("http")) return custom
+      return window.location.origin
     }
-    return process.env.NEXT_PUBLIC_POSTARC_API_URL || "http://localhost:8080"
+    return process.env.NEXT_PUBLIC_POSTARC_API_URL || "http://127.0.0.1:8080"
   }
 
   public async fetchLiveJmap(method: string, args: Record<string, unknown>): Promise<unknown | null> {
@@ -888,19 +532,17 @@ export class PostarcClient {
       const liveQuery = (await this.fetchLiveJmap("Email/query", queryArgs)) as {
         ids?: string[]
       } | null
-      if (liveQuery?.ids && liveQuery.ids.length > 0) {
-        const liveGet = (await this.fetchLiveJmap("Email/get", { ids: liveQuery.ids })) as {
-          list?: JmapEmail[]
-        } | null
-        if (liveGet?.list && liveGet.list.length > 0) {
-          for (const le of liveGet.list) {
-            const idx = this.emails.findIndex((e) => e.id === le.id)
-            if (idx >= 0) {
-              this.emails[idx] = le
-            } else {
-              this.emails.unshift(le)
-            }
+      if (liveQuery) {
+        if (Array.isArray(liveQuery.ids) && liveQuery.ids.length > 0) {
+          const liveGet = (await this.fetchLiveJmap("Email/get", { ids: liveQuery.ids })) as {
+            list?: JmapEmail[]
+          } | null
+          if (liveGet?.list) {
+            this.emails = liveGet.list
+            this.saveToStorage()
           }
+        } else if (Array.isArray(liveQuery.ids) && liveQuery.ids.length === 0) {
+          this.emails = []
           this.saveToStorage()
         }
       }
@@ -980,14 +622,59 @@ export class PostarcClient {
     htmlBody?: string
     attachments?: { blobId: string; name: string; type: string; size: number }[]
   }): Promise<{ emailId: string; submissionId: string }> {
-    const emailId = `msg_out_${Date.now()}`
-    const submissionId = `sub_${Date.now()}`
+    const sentMb = await this.getMailboxByRole("sent")
+    const sentMbId = sentMb?.id || "sent"
+
+    let emailId = `msg_out_${Date.now()}`
+    let submissionId = `sub_${Date.now()}`
+
+    try {
+      // 1. Create email via JMAP Email/set
+      const createRes = (await this.fetchLiveJmap("Email/set", {
+        create: {
+          temp1: {
+            mailboxIds: { [sentMbId]: true },
+            from: [params.from],
+            to: params.to,
+            cc: params.cc || [],
+            bcc: params.bcc || [],
+            subject: params.subject,
+            bodyValues: {
+              "1": {
+                value: params.htmlBody || params.body,
+              },
+            },
+            textBody: [{ partId: "1", type: params.htmlBody ? "text/html" : "text/plain", size: (params.htmlBody || params.body).length }],
+          },
+        },
+      })) as { created?: Record<string, { id: string }> } | null
+
+      if (createRes?.created?.temp1?.id) {
+        emailId = createRes.created.temp1.id
+
+        // 2. Submit email for outbound delivery via JMAP EmailSubmission/set
+        const subRes = (await this.fetchLiveJmap("EmailSubmission/set", {
+          create: {
+            sub1: {
+              emailId,
+              identityId: params.identityId,
+            },
+          },
+        })) as { created?: Record<string, { id: string }> } | null
+
+        if (subRes?.created?.sub1?.id) {
+          submissionId = subRes.created.sub1.id
+        }
+      }
+    } catch (e) {
+      console.warn("Live JMAP submission error:", e)
+    }
 
     const newEmail: JmapEmail = {
       id: emailId,
       blobId: emailId,
       threadId: emailId,
-      mailboxIds: { sent: true },
+      mailboxIds: { [sentMbId]: true },
       keywords: { $seen: true },
       size: (params.body.length || 512) + (params.attachments?.reduce((acc, a) => acc + a.size, 0) || 0),
       receivedAt: new Date().toISOString(),
@@ -1006,7 +693,7 @@ export class PostarcClient {
           isTruncated: false,
         },
       },
-      textBody: [{ partId: "body1", type: "text/plain", size: 1024 }],
+      textBody: [{ partId: "1", type: params.htmlBody ? "text/html" : "text/plain", size: (params.htmlBody || params.body).length }],
       attachments: params.attachments?.map((att, idx) => ({
         partId: `att_${idx}`,
         blobId: att.blobId,

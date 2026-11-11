@@ -66,7 +66,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("Background soft-delete garbage collection worker spawned.");
 
             // Spawn outbound delivery queue worker
-            smtp::spawn_outbound_queue_worker(repo.clone(), storage.clone(), event_bus.clone());
+            smtp::spawn_outbound_queue_worker(
+                repo.clone(),
+                storage.clone(),
+                event_bus.clone(),
+                config.hostname.clone(),
+            );
             info!("Outbound delivery queue worker active.");
 
             Some(repo)
